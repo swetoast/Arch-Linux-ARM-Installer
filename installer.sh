@@ -25,20 +25,28 @@ USERPASS=""
 ROOTPASS=""
 LOCALE="en_US.UTF-8"
 TIMEZONE="UTC"
+NETWORKING="systemd-networkd"
+
+cleanup_mounts() {
+  umount -R "$SDMOUNT" 2>/dev/null || true
+}
+trap cleanup_mounts EXIT
 
 ensure_prereqs() {
-  for cmd in dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot; do
+  for cmd in dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm; do
     command -v "$cmd" >/dev/null || { echo "Missing $cmd"; exit 1; }
   done
+  mkdir -p "$SDMOUNT" "$DOWNLOADDIR"
 }
 
 select_drive() {
-  mapfile -t DEVICES < <(lsblk -dn -o NAME,SIZE,MODEL | awk '{print $1 " " $2 " " $3}')
+  mapfile -t DEVICES < <(lsblk -dn -o NAME,SIZE,MODEL | awk '{print $1 " " $2 " " substr($0, index($0,$3))}')
+  ((${#DEVICES[@]})) || { echo "No block devices found."; exit 1; }
   MENU_ITEMS=()
   for i in "${!DEVICES[@]}"; do
     MENU_ITEMS+=("$i" "${DEVICES[$i]}")
   done
-  CHOICE=$(dialog --clear --stdout --menu "Select target drive" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" "${MENU_ITEMS[@]}")
+  CHOICE=$(dialog --clear --stdout --menu "Select target drive" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" "${MENU_ITEMS[@]}") || exit 1
   SDDEV="/dev/$(echo "${DEVICES[$CHOICE]}" | awk '{print $1}')"
   if [[ "$SDDEV" =~ (mmcblk|nvme) ]]; then
     SDPARTBOOT="${SDDEV}p1"
@@ -53,7 +61,7 @@ select_fs() {
   FS=$(dialog --clear --stdout --radiolist "Select filesystem for root partition" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" \
     1 "ext4" on \
     2 "btrfs" off \
-    3 "xfs" off)
+    3 "xfs" off) || exit 1
   case "$FS" in
     1) ROOTFS="ext4" ;;
     2) ROOTFS="btrfs" ;;
@@ -64,7 +72,7 @@ select_fs() {
 select_kernel() {
   KF=$(dialog --clear --stdout --radiolist "Select kernel flavor" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" \
     1 "linux-rpi" on \
-    2 "linux-rpi-16k" off)
+    2 "linux-rpi-16k" off) || exit 1
   case "$KF" in
     1) KERNEL_FLAVOR="linux-rpi" ;;
     2) KERNEL_FLAVOR="linux-rpi-16k" ;;
@@ -72,16 +80,23 @@ select_kernel() {
 }
 
 collect_system_info() {
-  HOSTNAME=$(dialog --clear --stdout --inputbox "Enter hostname" "$HEIGHT" "$WIDTH" "archarm")
-  USERNAME=$(dialog --clear --stdout --inputbox "Enter username" "$HEIGHT" "$WIDTH" "user")
-  USERPASS=$(dialog --clear --stdout --passwordbox "Enter password for $USERNAME" "$HEIGHT" "$WIDTH")
-  ROOTPASS=$(dialog --clear --stdout --passwordbox "Enter root password" "$HEIGHT" "$WIDTH")
-  LOCALE=$(dialog --clear --stdout --inputbox "Enter locale (e.g. en_US.UTF-8)" "$HEIGHT" "$WIDTH" "en_US.UTF-8")
-  TIMEZONE=$(dialog --clear --stdout --inputbox "Enter timezone (e.g. Europe/Stockholm)" "$HEIGHT" "$WIDTH" "UTC")
+  HOSTNAME=$(dialog --clear --stdout --inputbox "Enter hostname" "$HEIGHT" "$WIDTH" "rpi5") || exit 1
+  USERNAME=$(dialog --clear --stdout --inputbox "Enter username" "$HEIGHT" "$WIDTH" "pi") || exit 1
+  USERPASS=$(dialog --clear --stdout --passwordbox "Enter password for $USERNAME" "$HEIGHT" "$WIDTH") || exit 1
+  ROOTPASS=$(dialog --clear --stdout --passwordbox "Enter root password" "$HEIGHT" "$WIDTH") || exit 1
+  LOCALE=$(dialog --clear --stdout --inputbox "Enter locale (e.g. en_US.UTF-8 or sv_SE.UTF-8)" "$HEIGHT" "$WIDTH" "en_US.UTF-8") || exit 1
+  TIMEZONE=$(dialog --clear --stdout --inputbox "Enter timezone (e.g. Europe/Stockholm)" "$HEIGHT" "$WIDTH" "Europe/Stockholm") || exit 1
+  NETSEL=$(dialog --clear --stdout --radiolist "Select networking setup" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" \
+    1 "systemd-networkd + systemd-resolved" on \
+    2 "NetworkManager" off) || exit 1
+  case "$NETSEL" in
+    1) NETWORKING="systemd-networkd" ;;
+    2) NETWORKING="NetworkManager" ;;
+  esac
 }
 
 partition_format() {
-  dialog --yesno "WARNING: This will wipe $SDDEV. Continue?" "$HEIGHT" "$WIDTH" || exit 1
+  dialog --yesno "WARNING: This will WIPE $SDDEV. Continue?" "$HEIGHT" "$WIDTH" || exit 1
   wipefs -af "$SDDEV" || true
   sfdisk --quiet --wipe always "$SDDEV" << EOF
 ,256M,0c,
@@ -98,10 +113,8 @@ EOF
 }
 
 install_rootfs() {
-  mkdir -p "$DOWNLOADDIR"
   cd "$DOWNLOADDIR"
   [[ -f "$(basename "$DISTURL")" ]] || curl -JLO "$DISTURL"
-  mkdir -p "$SDMOUNT"
   mount "$SDPARTROOT" "$SDMOUNT"
   mkdir -p "$SDMOUNT/boot"
   mount "$SDPARTBOOT" "$SDMOUNT/boot"
@@ -112,13 +125,20 @@ configure_fstab() {
   root_uuid=$(blkid -s UUID -o value "$SDPARTROOT")
   boot_uuid=$(blkid -s UUID -o value "$SDPARTBOOT")
   case "$ROOTFS" in
-    ext4) root_type="ext4" root_opts="defaults,noatime" ;;
-    btrfs) root_type="btrfs" root_opts="compress=zstd,ssd,noatime,space_cache=v2" ;;
-    xfs) root_type="xfs" root_opts="defaults,noatime" ;;
+    ext4) root_type="ext4"; root_opts="defaults,noatime" ;;
+    btrfs) root_type="btrfs"; root_opts="compress=zstd,ssd,noatime,space_cache=v2" ;;
+    xfs) root_type="xfs"; root_opts="defaults,noatime" ;;
   esac
   cat > "$SDMOUNT/etc/fstab" <<EOT
 UUID=$root_uuid  /      $root_type  $root_opts  0 1
 UUID=$boot_uuid  /boot  vfat        defaults    0 2
+EOT
+}
+
+configure_cmdline() {
+  root_partuuid=$(blkid -s PARTUUID -o value "$SDPARTROOT")
+  cat > "$SDMOUNT/boot/cmdline.txt" <<EOT
+console=serial0,115200 console=tty1 root=PARTUUID=$root_partuuid rw rootwait fsck.repair=yes quiet splash systemd.unified_cgroup_hierarchy=1
 EOT
 }
 
@@ -135,10 +155,7 @@ replace_kernel() {
     pacman -Sy --noconfirm ${KERNEL_FLAVOR} ${KERNEL_FLAVOR}-headers linux-firmware
   "
 
-  umount "$SDMOUNT/dev" || true
-  umount "$SDMOUNT/proc" || true
-  umount "$SDMOUNT/sys" || true
-  umount "$SDMOUNT/run" || true
+  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
 install_tools_chroot() {
@@ -149,6 +166,10 @@ install_tools_chroot() {
 
   arch-chroot "$SDMOUNT" /bin/bash -c "
     set -euo pipefail
+    pacman -Sy --noconfirm sudo
+    if ! grep -q '^%wheel' /etc/sudoers; then
+      echo '%wheel ALL=(ALL) ALL' >> /etc/sudoers
+    fi
     case \"$ROOTFS\" in
       ext4)  pacman -Sy --noconfirm e2fsprogs ;;
       btrfs) pacman -Sy --noconfirm btrfs-progs ;;
@@ -157,10 +178,7 @@ install_tools_chroot() {
     pacman -Sy --noconfirm dosfstools
   "
 
-  umount "$SDMOUNT/dev" || true
-  umount "$SDMOUNT/proc" || true
-  umount "$SDMOUNT/sys" || true
-  umount "$SDMOUNT/run" || true
+  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
 configure_system_chroot() {
@@ -171,24 +189,52 @@ configure_system_chroot() {
 
   arch-chroot "$SDMOUNT" /bin/bash -c "
     set -euo pipefail
+    # Locale
+    sed -i '/^$LOCALE/d' /etc/locale.gen || true
     echo '$LOCALE UTF-8' >> /etc/locale.gen
     locale-gen
     echo 'LANG=$LOCALE' > /etc/locale.conf
+    echo 'KEYMAP=us' > /etc/vconsole.conf
 
+    # Timezone and time sync
     ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
     hwclock --systohc
+    systemctl enable systemd-timesyncd
 
+    # Hostname
     echo '$HOSTNAME' > /etc/hostname
 
-    useradd -m -G wheel -s /bin/bash $USERNAME
+    # User + passwords
+    id $USERNAME >/dev/null 2>&1 || useradd -m -G wheel -s /bin/bash $USERNAME
     echo '$USERNAME:$USERPASS' | chpasswd
     echo 'root:$ROOTPASS' | chpasswd
+
+    # Networking choice
+    if [[ '$NETWORKING' == 'systemd-networkd' ]]; then
+      # systemd-networkd + resolved
+      systemctl enable systemd-networkd
+      systemctl enable systemd-resolved
+
+      # Basic DHCP on all Ethernet interfaces
+      mkdir -p /etc/systemd/network
+      cat > /etc/systemd/network/20-wired-dhcp.network <<NET
+[Match]
+Name=e*
+
+[Network]
+DHCP=yes
+NET
+
+      # Use resolved as DNS
+      ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf || true
+    else
+      # NetworkManager
+      pacman -Sy --noconfirm networkmanager
+      systemctl enable NetworkManager
+    fi
   "
 
-  umount "$SDMOUNT/dev" || true
-  umount "$SDMOUNT/proc" || true
-  umount "$SDMOUNT/sys" || true
-  umount "$SDMOUNT/run" || true
+  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
 finish() {
@@ -197,7 +243,6 @@ finish() {
   dialog --msgbox "Installation complete." "$HEIGHT" "$WIDTH"
 }
 
-# Run everything in sequence
 ensure_prereqs
 select_drive
 select_fs
@@ -206,6 +251,7 @@ collect_system_info
 partition_format
 install_rootfs
 configure_fstab
+configure_cmdline
 replace_kernel
 install_tools_chroot
 configure_system_chroot
