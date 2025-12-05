@@ -1,10 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-if [[ $EUID -ne 0 ]]; then
-  echo "Run as root."
-  exit 1
-fi
+if [[ $EUID -ne 0 ]]; then echo "Run as root."; exit 1; fi
 
 HEIGHT=20
 WIDTH=70
@@ -25,14 +22,25 @@ USERPASS=""
 ROOTPASS=""
 LOCALE="en_US.UTF-8"
 TIMEZONE="UTC"
+KEYMAP="us"
 NETWORKING="systemd-networkd"
 WIFI_SSID=""
 WIFI_PASS=""
 WIFI_COUNTRY=""
+SSH_ENABLE="yes"
+SSH_KEYONLY="no"
+SSH_DISABLE_ROOT="no"
+CHRONY_ENABLE="no"
+SWAP_SIZE_GB="0"
+EXT4_TUNE="yes"
+TRIM_ENABLE="yes"
+AVAHI_ENABLE="yes"
+BOOTLOADER_INSTALL="no"
+GPU_MEM="128"
+ENABLE_SPI="no"
+ENABLE_I2C="no"
 
-cleanup_mounts() {
-  umount -R "$SDMOUNT" 2>/dev/null || true
-}
+cleanup_mounts() { umount -R "$SDMOUNT" 2>/dev/null || true; }
 trap cleanup_mounts EXIT
 
 ensure_prereqs() {
@@ -45,41 +53,22 @@ ensure_prereqs() {
 select_drive() {
   mapfile -t DEVICES < <(lsblk -dn -o NAME,SIZE,MODEL | awk '{print $1 " " $2 " " substr($0, index($0,$3))}')
   ((${#DEVICES[@]})) || { echo "No block devices found."; exit 1; }
-  MENU_ITEMS=()
-  for i in "${!DEVICES[@]}"; do
-    MENU_ITEMS+=("$i" "${DEVICES[$i]}")
-  done
+  MENU_ITEMS=(); for i in "${!DEVICES[@]}"; do MENU_ITEMS+=("$i" "${DEVICES[$i]}"); done
   CHOICE=$(dialog --clear --stdout --menu "Select target drive" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" "${MENU_ITEMS[@]}") || exit 1
   SDDEV="/dev/$(echo "${DEVICES[$CHOICE]}" | awk '{print $1}')"
-  if [[ "$SDDEV" =~ (mmcblk|nvme) ]]; then
-    SDPARTBOOT="${SDDEV}p1"
-    SDPARTROOT="${SDDEV}p2"
-  else
-    SDPARTBOOT="${SDDEV}1"
-    SDPARTROOT="${SDDEV}2"
-  fi
+  if [[ "$SDDEV" =~ (mmcblk|nvme) ]]; then SDPARTBOOT="${SDDEV}p1"; SDPARTROOT="${SDDEV}p2"; else SDPARTBOOT="${SDDEV}1"; SDPARTROOT="${SDDEV}2"; fi
 }
 
 select_fs() {
   FS=$(dialog --clear --stdout --radiolist "Select filesystem for root partition" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" \
-    1 "ext4" on \
-    2 "btrfs" off \
-    3 "xfs" off) || exit 1
-  case "$FS" in
-    1) ROOTFS="ext4" ;;
-    2) ROOTFS="btrfs" ;;
-    3) ROOTFS="xfs" ;;
-  esac
+    1 "ext4" on 2 "btrfs" off 3 "xfs" off) || exit 1
+  case "$FS" in 1) ROOTFS="ext4";; 2) ROOTFS="btrfs";; 3) ROOTFS="xfs";; esac
 }
 
 select_kernel() {
   KF=$(dialog --clear --stdout --radiolist "Select kernel flavor" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" \
-    1 "linux-rpi" on \
-    2 "linux-rpi-16k" off) || exit 1
-  case "$KF" in
-    1) KERNEL_FLAVOR="linux-rpi" ;;
-    2) KERNEL_FLAVOR="linux-rpi-16k" ;;
-  esac
+    1 "linux-rpi" on 2 "linux-rpi-16k" off) || exit 1
+  case "$KF" in 1) KERNEL_FLAVOR="linux-rpi";; 2) KERNEL_FLAVOR="linux-rpi-16k";; esac
 }
 
 collect_system_info() {
@@ -89,18 +78,39 @@ collect_system_info() {
   ROOTPASS=$(dialog --clear --stdout --passwordbox "Enter root password" "$HEIGHT" "$WIDTH") || exit 1
   LOCALE=$(dialog --clear --stdout --inputbox "Enter locale (e.g. en_US.UTF-8 or sv_SE.UTF-8)" "$HEIGHT" "$WIDTH" "en_US.UTF-8") || exit 1
   TIMEZONE=$(dialog --clear --stdout --inputbox "Enter timezone (e.g. Europe/Stockholm)" "$HEIGHT" "$WIDTH" "Europe/Stockholm") || exit 1
+  KEYMAP=$(dialog --clear --stdout --inputbox "Console keymap (e.g. us, se, de)" "$HEIGHT" "$WIDTH" "us") || exit 1
   NETSEL=$(dialog --clear --stdout --radiolist "Select networking setup" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" \
-    1 "systemd-networkd + resolved" on \
-    2 "NetworkManager" off) || exit 1
-  case "$NETSEL" in
-    1) NETWORKING="systemd-networkd" ;;
-    2) NETWORKING="NetworkManager" ;;
-  esac
+    1 "systemd-networkd + resolved" on 2 "NetworkManager" off) || exit 1
+  case "$NETSEL" in 1) NETWORKING="systemd-networkd";; 2) NETWORKING="NetworkManager";; esac
   if dialog --yesno "Configure Wi-Fi?" "$HEIGHT" "$WIDTH"; then
     WIFI_SSID=$(dialog --clear --stdout --inputbox "SSID" "$HEIGHT" "$WIDTH") || exit 1
     WIFI_PASS=$(dialog --clear --stdout --passwordbox "Password" "$HEIGHT" "$WIDTH") || exit 1
     WIFI_COUNTRY=$(dialog --clear --stdout --inputbox "Country code (e.g. SE, US)" "$HEIGHT" "$WIDTH" "SE") || exit 1
   fi
+  SSH_ENABLE=$(dialog --clear --stdout --radiolist "Enable SSH server?" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "yes" on 2 "no" off) || exit 1
+  if [[ "$SSH_ENABLE" == "2" ]]; then SSH_ENABLE="no"; else SSH_ENABLE="yes"; fi
+  if [[ "$SSH_ENABLE" == "yes" ]]; then
+    SSH_KEYONLY=$(dialog --clear --stdout --radiolist "SSH auth mode" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "password+keys" on 2 "keys only" off) || exit 1
+    if [[ "$SSH_KEYONLY" == "2" ]]; then SSH_KEYONLY="yes"; else SSH_KEYONLY="no"; fi
+    SSH_DISABLE_ROOT=$(dialog --clear --stdout --radiolist "Disable root SSH login?" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "no" on 2 "yes" off) || exit 1
+    if [[ "$SSH_DISABLE_ROOT" == "2" ]]; then SSH_DISABLE_ROOT="yes"; else SSH_DISABLE_ROOT="no"; fi
+  fi
+  CHRONY_ENABLE=$(dialog --clear --stdout --radiolist "Use chrony for NTP?" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "no (timesyncd)" on 2 "yes (chrony)" off) || exit 1
+  if [[ "$CHRONY_ENABLE" == "2" ]]; then CHRONY_ENABLE="yes"; else CHRONY_ENABLE="no"; fi
+  SWAP_SIZE_GB=$(dialog --clear --stdout --inputbox "Swap file size in GB (0 to skip)" "$HEIGHT" "$WIDTH" "0") || exit 1
+  EXT4_TUNE=$(dialog --clear --stdout --radiolist "Tune ext4 reserved blocks to 0?" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "yes" on 2 "no" off) || exit 1
+  if [[ "$EXT4_TUNE" == "2" ]]; then EXT4_TUNE="no"; else EXT4_TUNE="yes"; fi
+  TRIM_ENABLE=$(dialog --clear --stdout --radiolist "Enable weekly fstrim?" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "yes" on 2 "no" off) || exit 1
+  if [[ "$TRIM_ENABLE" == "2" ]]; then TRIM_ENABLE="no"; else TRIM_ENABLE="yes"; fi
+  AVAHI_ENABLE=$(dialog --clear --stdout --radiolist "Enable Avahi/mDNS?" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "yes" on 2 "no" off) || exit 1
+  if [[ "$AVAHI_ENABLE" == "2" ]]; then AVAHI_ENABLE="no"; else AVAHI_ENABLE="yes"; fi
+  BOOTLOADER_INSTALL=$(dialog --clear --stdout --radiolist "Install raspberrypi-bootloader?" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "no" on 2 "yes" off) || exit 1
+  if [[ "$BOOTLOADER_INSTALL" == "2" ]]; then BOOTLOADER_INSTALL="yes"; else BOOTLOADER_INSTALL="no"; fi
+  GPU_MEM=$(dialog --clear --stdout --inputbox "GPU memory (MB) for /boot/config.txt" "$HEIGHT" "$WIDTH" "128") || exit 1
+  ENABLE_SPI=$(dialog --clear --stdout --radiolist "Enable SPI overlay?" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "no" on 2 "yes" off) || exit 1
+  if [[ "$ENABLE_SPI" == "2" ]]; then ENABLE_SPI="yes"; else ENABLE_SPI="no"; fi
+  ENABLE_I2C=$(dialog --clear --stdout --radiolist "Enable I2C overlay?" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" 1 "no" on 2 "yes" off) || exit 1
+  if [[ "$ENABLE_I2C" == "2" ]]; then ENABLE_I2C="yes"; else ENABLE_I2C="no"; fi
 }
 
 partition_format() {
@@ -110,11 +120,13 @@ partition_format() {
 ,256M,0c,
 ,,,
 EOF
-  partprobe "$SDDEV" || true
-  udevadm settle || true
+  partprobe "$SDDEV" || true; udevadm settle || true
   mkfs.vfat -F 32 "$SDPARTBOOT"
   case "$ROOTFS" in
-    ext4) mkfs.ext4 -F "$SDPARTROOT" ;;
+    ext4)
+      mkfs.ext4 -F "$SDPARTROOT"
+      if [[ "$EXT4_TUNE" == "yes" ]]; then tune2fs -m 0 "$SDPARTROOT" || true; fi
+      ;;
     btrfs) mkfs.btrfs -f "$SDPARTROOT" ;;
     xfs) mkfs.xfs -f "$SDPARTROOT" ;;
   esac
@@ -123,15 +135,12 @@ EOF
 install_rootfs() {
   cd "$DOWNLOADDIR"
   [[ -f "$(basename "$DISTURL")" ]] || curl -JLO "$DISTURL"
-  mount "$SDPARTROOT" "$SDMOUNT"
-  mkdir -p "$SDMOUNT/boot"
-  mount "$SDPARTBOOT" "$SDMOUNT/boot"
+  mount "$SDPARTROOT" "$SDMOUNT"; mkdir -p "$SDMOUNT/boot"; mount "$SDPARTBOOT" "$SDMOUNT/boot"
   bsdtar -xpf "$DOWNLOADDIR/$(basename "$DISTURL")" -C "$SDMOUNT"
 }
 
 configure_fstab() {
-  root_uuid=$(blkid -s UUID -o value "$SDPARTROOT")
-  boot_uuid=$(blkid -s UUID -o value "$SDPARTBOOT")
+  root_uuid=$(blkid -s UUID -o value "$SDPARTROOT"); boot_uuid=$(blkid -s UUID -o value "$SDPARTBOOT")
   case "$ROOTFS" in
     ext4) root_type="ext4"; root_opts="defaults,noatime" ;;
     btrfs) root_type="btrfs"; root_opts="compress=zstd,ssd,noatime,space_cache=v2" ;;
@@ -151,40 +160,34 @@ EOT
 }
 
 replace_kernel() {
-  mount --bind /dev  "$SDMOUNT/dev"
-  mount --bind /proc "$SDMOUNT/proc"
-  mount --bind /sys  "$SDMOUNT/sys"
-  mount --bind /run  "$SDMOUNT/run"
-
-  arch-chroot "$SDMOUNT" /bin/bash -c "
-    set -euo pipefail
-    pacman-key --init || true
-    pacman-key --populate archlinuxarm || true
-    pacman -Sy --noconfirm ${KERNEL_FLAVOR} ${KERNEL_FLAVOR}-headers linux-firmware
-  "
-
+  mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
+  arch-chroot "$SDMOUNT" /bin/bash -c "set -euo pipefail; pacman-key --init || true; pacman-key --populate archlinuxarm || true; pacman -Sy --noconfirm ${KERNEL_FLAVOR} ${KERNEL_FLAVOR}-headers linux-firmware"
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
 install_tools_chroot() {
-  mount --bind /dev  "$SDMOUNT/dev"
-  mount --bind /proc "$SDMOUNT/proc"
-  mount --bind /sys  "$SDMOUNT/sys"
-  mount --bind /run  "$SDMOUNT/run"
+  mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
 
-  cat > "$SDMOUNT/tmp/install-tools.sh" <<EOF
+  cat > "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
 #!/bin/bash
 set -euo pipefail
-pacman -Sy --noconfirm sudo dosfstools wireless-regdb
-if ! grep -q '^%wheel' /etc/sudoers; then
-  echo '%wheel ALL=(ALL) ALL' >> /etc/sudoers
-fi
-case "$ROOTFS" in
-  ext4)  pacman -Sy --noconfirm e2fsprogs ;;
-  btrfs) pacman -Sy --noconfirm btrfs-progs ;;
-  xfs)   pacman -Sy --noconfirm xfsprogs ;;
-esac
+pacman -Sy --noconfirm sudo dosfstools wireless-regdb logrotate base-devel
+if ! grep -q '^%wheel' /etc/sudoers; then echo '%wheel ALL=(ALL) ALL' >> /etc/sudoers; fi
 EOF
+
+  if [[ "$ROOTFS" == "ext4" ]]; then
+    cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+pacman -Sy --noconfirm e2fsprogs
+EOF
+  elif [[ "$ROOTFS" == "btrfs" ]]; then
+    cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+pacman -Sy --noconfirm btrfs-progs
+EOF
+  elif [[ "$ROOTFS" == "xfs" ]]; then
+    cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+pacman -Sy --noconfirm xfsprogs
+EOF
+  fi
 
   if [[ -n "$WIFI_SSID" ]]; then
     if [[ "$NETWORKING" == "systemd-networkd" ]]; then
@@ -198,6 +201,36 @@ EOF
     fi
   fi
 
+  if [[ "$SSH_ENABLE" == "yes" ]]; then
+    cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+pacman -Sy --noconfirm openssh
+EOF
+  fi
+
+  if [[ "$AVAHI_ENABLE" == "yes" ]]; then
+    cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+pacman -Sy --noconfirm avahi nss-mdns
+EOF
+  fi
+
+  if [[ "$CHRONY_ENABLE" == "yes" ]]; then
+    cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+pacman -Sy --noconfirm chrony
+EOF
+  fi
+
+  if [[ "$TRIM_ENABLE" == "yes" ]]; then
+    cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+systemctl enable fstrim.timer
+EOF
+  fi
+
+  if [[ "$BOOTLOADER_INSTALL" == "yes" ]]; then
+    cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+pacman -Sy --noconfirm raspberrypi-bootloader
+EOF
+  fi
+
   chmod +x "$SDMOUNT/tmp/install-tools.sh"
   arch-chroot "$SDMOUNT" /tmp/install-tools.sh
   rm -f "$SDMOUNT/tmp/install-tools.sh"
@@ -206,10 +239,7 @@ EOF
 }
 
 configure_system_chroot() {
-  mount --bind /dev  "$SDMOUNT/dev"
-  mount --bind /proc "$SDMOUNT/proc"
-  mount --bind /sys  "$SDMOUNT/sys"
-  mount --bind /run  "$SDMOUNT/run"
+  mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
 
   sanitized_ssid=$(echo "$WIFI_SSID" | sed 's/[^A-Za-z0-9._-]/_/g' || true)
 
@@ -217,12 +247,12 @@ configure_system_chroot() {
 #!/bin/bash
 set -euo pipefail
 
-# Locale
+# Locale and keymap
 sed -i '/^$LOCALE/d' /etc/locale.gen || true
 echo "$LOCALE UTF-8" >> /etc/locale.gen
 locale-gen
 echo "LANG=$LOCALE" > /etc/locale.conf
-echo "KEYMAP=us" > /etc/vconsole.conf
+echo "KEYMAP=$KEYMAP" > /etc/vconsole.conf
 
 # Timezone and time sync
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
@@ -233,9 +263,7 @@ systemctl enable systemd-timesyncd
 echo "$HOSTNAME" > /etc/hostname
 
 # User + passwords
-if ! id "$USERNAME" >/dev/null 2>&1; then
-  useradd -m -G wheel -s /bin/bash "$USERNAME"
-fi
+if ! id "$USERNAME" >/dev/null 2>&1; then useradd -m -G wheel -s /bin/bash "$USERNAME"; fi
 echo "$USERNAME:$USERPASS" | chpasswd
 echo "root:$ROOTPASS" | chpasswd
 
@@ -269,10 +297,85 @@ WIFI
 else
   systemctl enable NetworkManager
   if [[ -n "$WIFI_SSID" ]]; then
+    # persist regulatory domain via a oneshot service
     iw reg set $WIFI_COUNTRY || true
+    cat > /etc/systemd/system/regdomain.service <<SRV
+[Unit]
+Description=Set Wi-Fi regulatory domain
+After=network-pre.target
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/iw reg set $WIFI_COUNTRY
+[Install]
+WantedBy=multi-user.target
+SRV
+    systemctl enable regdomain.service || true
     nmcli dev wifi connect "$WIFI_SSID" password "$WIFI_PASS" || true
   fi
 fi
+
+# SSH
+if [[ "$SSH_ENABLE" == "yes" ]]; then
+  systemctl enable sshd
+  if [[ "$SSH_KEYONLY" == "yes" ]]; then
+    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config || true
+  fi
+  if [[ "$SSH_DISABLE_ROOT" == "yes" ]]; then
+    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config || true
+  fi
+fi
+
+# Avahi/mDNS
+if [[ "$AVAHI_ENABLE" == "yes" ]]; then
+  systemctl enable avahi-daemon
+  # ensure nss-mdns is configured
+  if ! grep -q 'mdns4_minimal' /etc/nsswitch.conf 2>/dev/null; then
+    sed -i 's/hosts:      files dns/hosts:      files mdns4_minimal [NOTFOUND=return] dns/' /etc/nsswitch.conf || true
+  fi
+fi
+
+# Chrony
+if [[ "$CHRONY_ENABLE" == "yes" ]]; then
+  systemctl disable systemd-timesyncd || true
+  systemctl enable chrony
+fi
+
+# Swap
+if [[ "$SWAP_SIZE_GB" != "0" && "$SWAP_SIZE_GB" != "" ]]; then
+  if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
+    fallocate -l "${SWAP_SIZE_GB}G" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_SIZE_GB*1024))
+    chmod 600 /swapfile
+    mkswap /swapfile
+    echo "/swapfile none swap defaults 0 0" >> /etc/fstab
+  fi
+fi
+
+# fstrim
+if [[ "$TRIM_ENABLE" == "yes" ]]; then
+  systemctl enable fstrim.timer || true
+fi
+
+# Boot config tweaks
+BOOTCFG="/boot/config.txt"
+touch "\$BOOTCFG"
+if grep -q '^gpu_mem=' "\$BOOTCFG"; then
+  sed -i "s/^gpu_mem=.*/gpu_mem=$GPU_MEM/" "\$BOOTCFG"
+else
+  echo "gpu_mem=$GPU_MEM" >> "\$BOOTCFG"
+fi
+if [[ "$ENABLE_SPI" == "yes" ]]; then
+  grep -q '^dtparam=spi=on' "\$BOOTCFG" || echo "dtparam=spi=on" >> "\$BOOTCFG"
+fi
+if [[ "$ENABLE_I2C" == "yes" ]]; then
+  grep -q '^dtparam=i2c_arm=on' "\$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "\$BOOTCFG"
+fi
+
+# Enable bootloader if requested (package installed earlier)
+if [[ "$BOOTLOADER_INSTALL" == "yes" ]]; then
+  # no-op here; package install handled in install-tools
+  true
+fi
+
 EOF
 
   chmod +x "$SDMOUNT/tmp/setup-system.sh"
@@ -282,11 +385,7 @@ EOF
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
-finish() {
-  sync
-  umount -R "$SDMOUNT" || true
-  dialog --msgbox "Installation complete." "$HEIGHT" "$WIDTH"
-}
+finish() { sync; umount -R "$SDMOUNT" || true; dialog --msgbox "Installation complete." "$HEIGHT" "$WIDTH"; }
 
 ensure_prereqs
 select_drive
