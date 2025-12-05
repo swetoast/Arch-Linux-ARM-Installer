@@ -5,9 +5,6 @@
   This project provides a script that helps set up Arch Linux ARM on a drive such as an SD card, M.2 drive, or hard disk. It guides you through the process with a text-based interface where you choose the drive and the type of file system. After that, the script runs all steps automatically.
 </p>
 
-
-
-
 Source: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
 
 ## What the script does
@@ -17,21 +14,24 @@ Source: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
 3. Lets you choose the kernel flavor (linux‑rpi or linux‑rpi‑16k).  
 4. Prompts for hostname, username, user password, root password, locale, and timezone.  
 5. Prompts for networking setup (systemd‑networkd + systemd‑resolved or NetworkManager).  
-6. Wipes and partitions the selected drive.  
-7. Formats the partitions (boot partition as FAT32, root partition with your chosen file system).  
-8. Downloads and installs Arch Linux ARM.  
-9. Creates an `fstab` file so the system knows how to mount the partitions.  
-10. Generates a correct Raspberry Pi 4/5 `cmdline.txt` using the root partition’s PARTUUID.  
-11. Enters the new system and installs the selected kernel and its headers.  
-12. Installs the tools needed for the chosen file system and `dosfstools`.  
-13. Installs `sudo` and configures the wheel group in `/etc/sudoers`.  
-14. Creates the user account, sets passwords, and enables systemd services for networking and time sync.  
-15. Cleans up and unmounts the drive.  
+6. Optionally prompts for Wi‑Fi SSID, password, and country code.  
+7. Wipes and partitions the selected drive.  
+8. Formats the partitions (boot partition as FAT32, root partition with your chosen file system).  
+9. Downloads and installs Arch Linux ARM.  
+10. Creates an `fstab` file so the system knows how to mount the partitions.  
+11. Generates a correct Raspberry Pi 4/5 `cmdline.txt` using the root partition’s PARTUUID.  
+12. Enters the new system and installs the selected kernel and its headers.  
+13. Installs the tools needed for the chosen file system and `dosfstools`.  
+14. Installs `sudo` and configures the wheel group in `/etc/sudoers`.  
+15. Creates the user account, sets passwords, and enables systemd services for networking and time sync.  
+16. If Wi‑Fi was configured, installs `iwd` (for systemd‑networkd) or `NetworkManager` + `iw`, sets the regulatory domain, and writes the Wi‑Fi configuration.  
+17. Cleans up and unmounts the drive.  
 
 ## Requirements
 
 - Run the script as root.  
 - Arch Linux system with `dialog`, `lsblk`, `sfdisk`, `mkfs.vfat`, `bsdtar`, `curl`, `arch-chroot`, `blkid`, `partprobe`, and `udevadm` installed.  
+- For Wi‑Fi setup: `iwd` or `NetworkManager` + `iw` will be installed automatically if you choose Wi‑Fi.  
 
 ## How to use
 
@@ -43,11 +43,11 @@ Source: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
    ```bash
    sudo ./installer.sh
    ```
-3. Follow the on-screen prompts to select the drive, file system, kernel, hostname, user, passwords, locale, timezone, and networking.  
+3. Follow the on-screen prompts to select the drive, file system, kernel, hostname, user, passwords, locale, timezone, networking, and optionally Wi‑Fi SSID, password, and country code.  
 4. The script will handle the rest automatically.  
 
 ## Notes
 
 - The chosen drive will be completely wiped. Make sure you select the correct one.  
 - The script uses a text interface with uniform windows for a consistent experience.  
-- At the end, you will have a bootable Arch Linux ARM system prepared on your chosen drive, configured for Raspberry Pi 4/5 with your chosen kernel, user account, and networking setup.  
+- At the end, you will have a bootable Arch Linux ARM system prepared on your chosen drive, configured for Raspberry Pi 4/5 with your chosen kernel, user account, networking setup, and optional Wi‑Fi.  
