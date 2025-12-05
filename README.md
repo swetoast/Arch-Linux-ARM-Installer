@@ -2,6 +2,8 @@
 
 This project provides a script that helps set up Arch Linux ARM on a drive such as an SD card, M.2 drive, or hard disk. It guides you through the process with a text-based interface where you choose the drive and the type of file system. After that, the script runs all steps automatically.
 
+Source: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
+
 ## What the script does
 
 1. Shows you a list of available drives so you can pick the one you want to use.  
