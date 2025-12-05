@@ -26,6 +26,9 @@ ROOTPASS=""
 LOCALE="en_US.UTF-8"
 TIMEZONE="UTC"
 NETWORKING="systemd-networkd"
+WIFI_SSID=""
+WIFI_PASS=""
+WIFI_COUNTRY=""
 
 cleanup_mounts() {
   umount -R "$SDMOUNT" 2>/dev/null || true
@@ -33,7 +36,7 @@ cleanup_mounts() {
 trap cleanup_mounts EXIT
 
 ensure_prereqs() {
-  for cmd in dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm; do
+  for cmd in dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm sed awk grep; do
     command -v "$cmd" >/dev/null || { echo "Missing $cmd"; exit 1; }
   done
   mkdir -p "$SDMOUNT" "$DOWNLOADDIR"
@@ -87,12 +90,17 @@ collect_system_info() {
   LOCALE=$(dialog --clear --stdout --inputbox "Enter locale (e.g. en_US.UTF-8 or sv_SE.UTF-8)" "$HEIGHT" "$WIDTH" "en_US.UTF-8") || exit 1
   TIMEZONE=$(dialog --clear --stdout --inputbox "Enter timezone (e.g. Europe/Stockholm)" "$HEIGHT" "$WIDTH" "Europe/Stockholm") || exit 1
   NETSEL=$(dialog --clear --stdout --radiolist "Select networking setup" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" \
-    1 "systemd-networkd + systemd-resolved" on \
+    1 "systemd-networkd + resolved" on \
     2 "NetworkManager" off) || exit 1
   case "$NETSEL" in
     1) NETWORKING="systemd-networkd" ;;
     2) NETWORKING="NetworkManager" ;;
   esac
+  if dialog --yesno "Configure Wi-Fi?" "$HEIGHT" "$WIDTH"; then
+    WIFI_SSID=$(dialog --clear --stdout --inputbox "SSID" "$HEIGHT" "$WIDTH") || exit 1
+    WIFI_PASS=$(dialog --clear --stdout --passwordbox "Password" "$HEIGHT" "$WIDTH") || exit 1
+    WIFI_COUNTRY=$(dialog --clear --stdout --inputbox "Country code (e.g. SE, US)" "$HEIGHT" "$WIDTH" "SE") || exit 1
+  fi
 }
 
 partition_format() {
@@ -164,19 +172,35 @@ install_tools_chroot() {
   mount --bind /sys  "$SDMOUNT/sys"
   mount --bind /run  "$SDMOUNT/run"
 
-  arch-chroot "$SDMOUNT" /bin/bash -c "
-    set -euo pipefail
-    pacman -Sy --noconfirm sudo
-    if ! grep -q '^%wheel' /etc/sudoers; then
-      echo '%wheel ALL=(ALL) ALL' >> /etc/sudoers
+  cat > "$SDMOUNT/tmp/install-tools.sh" <<EOF
+#!/bin/bash
+set -euo pipefail
+pacman -Sy --noconfirm sudo dosfstools wireless-regdb
+if ! grep -q '^%wheel' /etc/sudoers; then
+  echo '%wheel ALL=(ALL) ALL' >> /etc/sudoers
+fi
+case "$ROOTFS" in
+  ext4)  pacman -Sy --noconfirm e2fsprogs ;;
+  btrfs) pacman -Sy --noconfirm btrfs-progs ;;
+  xfs)   pacman -Sy --noconfirm xfsprogs ;;
+esac
+EOF
+
+  if [[ -n "$WIFI_SSID" ]]; then
+    if [[ "$NETWORKING" == "systemd-networkd" ]]; then
+      cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+pacman -Sy --noconfirm iwd
+EOF
+    else
+      cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
+pacman -Sy --noconfirm networkmanager iw
+EOF
     fi
-    case \"$ROOTFS\" in
-      ext4)  pacman -Sy --noconfirm e2fsprogs ;;
-      btrfs) pacman -Sy --noconfirm btrfs-progs ;;
-      xfs)   pacman -Sy --noconfirm xfsprogs ;;
-    esac
-    pacman -Sy --noconfirm dosfstools
-  "
+  fi
+
+  chmod +x "$SDMOUNT/tmp/install-tools.sh"
+  arch-chroot "$SDMOUNT" /tmp/install-tools.sh
+  rm -f "$SDMOUNT/tmp/install-tools.sh"
 
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
@@ -187,52 +211,73 @@ configure_system_chroot() {
   mount --bind /sys  "$SDMOUNT/sys"
   mount --bind /run  "$SDMOUNT/run"
 
-  arch-chroot "$SDMOUNT" /bin/bash -c "
-    set -euo pipefail
-    # Locale
-    sed -i '/^$LOCALE/d' /etc/locale.gen || true
-    echo '$LOCALE UTF-8' >> /etc/locale.gen
-    locale-gen
-    echo 'LANG=$LOCALE' > /etc/locale.conf
-    echo 'KEYMAP=us' > /etc/vconsole.conf
+  sanitized_ssid=$(echo "$WIFI_SSID" | sed 's/[^A-Za-z0-9._-]/_/g' || true)
 
-    # Timezone and time sync
-    ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
-    hwclock --systohc
-    systemctl enable systemd-timesyncd
+  cat > "$SDMOUNT/tmp/setup-system.sh" <<EOF
+#!/bin/bash
+set -euo pipefail
 
-    # Hostname
-    echo '$HOSTNAME' > /etc/hostname
+# Locale
+sed -i '/^$LOCALE/d' /etc/locale.gen || true
+echo "$LOCALE UTF-8" >> /etc/locale.gen
+locale-gen
+echo "LANG=$LOCALE" > /etc/locale.conf
+echo "KEYMAP=us" > /etc/vconsole.conf
 
-    # User + passwords
-    id $USERNAME >/dev/null 2>&1 || useradd -m -G wheel -s /bin/bash $USERNAME
-    echo '$USERNAME:$USERPASS' | chpasswd
-    echo 'root:$ROOTPASS' | chpasswd
+# Timezone and time sync
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+hwclock --systohc
+systemctl enable systemd-timesyncd
 
-    # Networking choice
-    if [[ '$NETWORKING' == 'systemd-networkd' ]]; then
-      # systemd-networkd + resolved
-      systemctl enable systemd-networkd
-      systemctl enable systemd-resolved
+# Hostname
+echo "$HOSTNAME" > /etc/hostname
 
-      # Basic DHCP on all Ethernet interfaces
-      mkdir -p /etc/systemd/network
-      cat > /etc/systemd/network/20-wired-dhcp.network <<NET
+# User + passwords
+if ! id "$USERNAME" >/dev/null 2>&1; then
+  useradd -m -G wheel -s /bin/bash "$USERNAME"
+fi
+echo "$USERNAME:$USERPASS" | chpasswd
+echo "root:$ROOTPASS" | chpasswd
+
+# Networking
+if [[ "$NETWORKING" == "systemd-networkd" ]]; then
+  systemctl enable systemd-networkd systemd-resolved
+  mkdir -p /etc/systemd/network
+  cat > /etc/systemd/network/20-wired-dhcp.network <<NET
 [Match]
 Name=e*
-
 [Network]
 DHCP=yes
 NET
+  ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf || true
 
-      # Use resolved as DNS
-      ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf || true
-    else
-      # NetworkManager
-      pacman -Sy --noconfirm networkmanager
-      systemctl enable NetworkManager
-    fi
-  "
+  if [[ -n "$WIFI_SSID" ]]; then
+    systemctl enable iwd
+    mkdir -p /etc/iwd
+    cat > /etc/iwd/main.conf <<CONF
+[General]
+EnableNetworkConfiguration=true
+RegulatoryDomain=$WIFI_COUNTRY
+CONF
+    cat > /etc/iwd/$sanitized_ssid.psk <<WIFI
+[Security]
+PreSharedKey=$WIFI_PASS
+WIFI
+    chmod 600 /etc/iwd/$sanitized_ssid.psk || true
+  fi
+
+else
+  systemctl enable NetworkManager
+  if [[ -n "$WIFI_SSID" ]]; then
+    iw reg set $WIFI_COUNTRY || true
+    nmcli dev wifi connect "$WIFI_SSID" password "$WIFI_PASS" || true
+  fi
+fi
+EOF
+
+  chmod +x "$SDMOUNT/tmp/setup-system.sh"
+  arch-chroot "$SDMOUNT" /tmp/setup-system.sh
+  rm -f "$SDMOUNT/tmp/setup-system.sh"
 
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
