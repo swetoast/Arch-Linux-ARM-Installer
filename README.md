@@ -1,6 +1,12 @@
 # Arch Linux ARM Installer (Raspberry Pi 4/5)
 
-This project provides a script that helps set up Arch Linux ARM on a drive such as an SD card, M.2 drive, or hard disk. It guides you through the process with a text-based interface where you choose the drive and the type of file system. After that, the script runs all steps automatically.
+<p>
+  <img src="https://github.com/user-attachments/assets/7974f2e2-a159-4d6b-ba08-9564e6b0e61b" alt="Arch Linux Logo" width="120" align="right" style="margin-left:15px;"/>
+  This project provides a script that helps set up Arch Linux ARM on a drive such as an SD card, M.2 drive, or hard disk. It guides you through the process with a text-based interface where you choose the drive and the type of file system. After that, the script runs all steps automatically.
+</p>
+
+
+
 
 Source: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
 
