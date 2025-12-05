@@ -32,7 +32,6 @@ Source: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
 
 - Run the script as root.  
 - Arch Linux system with `dialog`, `lsblk`, `sfdisk`, `mkfs.vfat`, `bsdtar`, `curl`, `arch-chroot`, `blkid`, `partprobe`, and `udevadm` installed.  
-- Internet connection to download Arch Linux ARM and the kernel package.  
 
 ## How to use
 
