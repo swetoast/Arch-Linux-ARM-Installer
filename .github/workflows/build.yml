@@ -38,7 +38,7 @@ jobs:
           IMAGE_SIZE_GB: '4'
           BOOT_MB: '256'
           ROOTFS: 'ext4'
-          DISTURL: 'https://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz'
+          DISTURL: 'http://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz'
         run: |
           ./scripts/build-image.sh
 
