@@ -10,7 +10,6 @@ MENU_HEIGHT=10
 
 SDMOUNT=/mnt/target
 DOWNLOADDIR=/tmp/archarm
-# NOTE: Point 1 skipped intentionally; keep HTTP (no HTTPS/signature changes)
 DISTURL="http://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz"
 
 SDDEV=""
@@ -79,6 +78,17 @@ ensure_prereqs() {
     command -v "$cmd" >/dev/null || { echo "Missing $cmd"; exit 1; }
   done
   mkdir -p "$SDMOUNT" "$DOWNLOADDIR"
+}
+
+assert_cross_arch_chroot() {
+  mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
+  if ! arch-chroot "$SDMOUNT" /usr/bin/true 2>/dev/null; then
+    umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
+    dialog --msgbox "Foreign-arch chroot detected. Install qemu-user-static/binfmt or run this on an ARM host." "$HEIGHT" "$WIDTH"
+    echo "ERROR: arch-chroot into ARM rootfs requires binfmt_misc + qemu-aarch64-static, or an ARM host."
+    exit 1
+  fi
+  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
 select_drive() {
@@ -165,7 +175,6 @@ EOF
 
 install_rootfs() {
   cd "$DOWNLOADDIR"
-  # NOTE: Point 1 skipped; keep simple download (no --fail/--retry/verification)
   [[ -f "$(basename "$DISTURL")" ]] || curl -JLO "$DISTURL"
   mount "$SDPARTROOT" "$SDMOUNT"; mkdir -p "$SDMOUNT/boot"; mount "$SDPARTBOOT" "$SDMOUNT/boot"
   bsdtar -xpf "$DOWNLOADDIR/$(basename "$DISTURL")" -C "$SDMOUNT"
@@ -186,19 +195,20 @@ EOT
 
 configure_cmdline() {
   root_partuuid=$(blkid -s PARTUUID -o value "$SDPARTROOT")
-  # NOTE: Point 6 skipped; keep 'splash' in cmdline.txt
   cat > "$SDMOUNT/boot/cmdline.txt" <<EOT
 console=serial0,115200 console=tty1 root=PARTUUID=$root_partuuid rw rootwait fsck.repair=yes quiet splash systemd.unified_cgroup_hierarchy=1
 EOT
 }
 
 replace_kernel() {
+  assert_cross_arch_chroot
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
   arch-chroot "$SDMOUNT" /bin/bash -c "set -euo pipefail; pacman-key --init || true; pacman-key --populate archlinuxarm || true; pacman -Sy --noconfirm ${KERNEL_FLAVOR} ${KERNEL_FLAVOR}-headers linux-firmware"
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
 install_tools_chroot() {
+  assert_cross_arch_chroot
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
 
   cat > "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
@@ -272,9 +282,11 @@ EOF
 }
 
 configure_system_chroot() {
+  assert_cross_arch_chroot
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
 
   sanitized_ssid=$(echo "$WIFI_SSID" | sed 's/[^A-Za-z0-9._-]/_/g' || true)
+  WIFI_COUNTRY_UPPER=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
 
   cat > "$SDMOUNT/tmp/setup-system.sh" <<EOF
 #!/bin/bash
@@ -318,9 +330,9 @@ NET
     cat > /etc/iwd/main.conf <<CONF
 [General]
 EnableNetworkConfiguration=true
-RegulatoryDomain=$WIFI_COUNTRY
+RegulatoryDomain=$WIFI_COUNTRY_UPPER
 CONF
-    # Point 3: store PSK under /var/lib/iwd
+    # Store PSK under /var/lib/iwd
     mkdir -p /var/lib/iwd
     cat > /var/lib/iwd/$sanitized_ssid.psk <<WIFI
 [Security]
@@ -333,26 +345,25 @@ else
   systemctl enable NetworkManager
   if [[ -n "$WIFI_SSID" ]]; then
     # persist regulatory domain via a oneshot service
-    iw reg set $WIFI_COUNTRY || true
+    iw reg set $WIFI_COUNTRY_UPPER || true
     cat > /etc/systemd/system/regdomain.service <<SRV
 [Unit]
 Description=Set Wi-Fi regulatory domain
 After=network-pre.target
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/iw reg set $WIFI_COUNTRY
+ExecStart=/usr/bin/iw reg set $WIFI_COUNTRY_UPPER
 [Install]
 WantedBy=multi-user.target
 SRV
     systemctl enable regdomain.service || true
-    # Point 2: pre-provision NM profile instead of nmcli connect in chroot
+    # Pre-provision NM profile (portable; no hardcoded interface name)
     mkdir -p /etc/NetworkManager/system-connections
     cat > "/etc/NetworkManager/system-connections/${sanitized_ssid}.nmconnection" <<NM
 [connection]
 id=${WIFI_SSID}
 type=wifi
 autoconnect=true
-interface-name=wlan0
 
 [wifi]
 ssid=${WIFI_SSID}
@@ -377,13 +388,13 @@ if [[ "$SSH_ENABLE" == "yes" ]]; then
   systemctl enable sshd
   if [[ "$SSH_KEYONLY" == "yes" ]]; then
     sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config || true
-    # Point 7: seed authorized_keys from /root/seed_authorized_key.pub if present
+    # Seed authorized_keys from /root/seed_authorized_key.pub if present
     mkdir -p "/home/$USERNAME/.ssh"
     chmod 700 "/home/$USERNAME/.ssh"
     if [[ -f /root/seed_authorized_key.pub ]]; then
       cat /root/seed_authorized_key.pub >> "/home/$USERNAME/.ssh/authorized_keys"
       chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
-      chown -R "$USERNAME:wheel" "/home/$USERNAME/.ssh"
+      chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
     else
       echo "WARNING: SSH key-only selected but no /root/seed_authorized_key.pub found." >&2
     fi
@@ -396,7 +407,7 @@ fi
 # Avahi/mDNS
 if [[ "$AVAHI_ENABLE" == "yes" ]]; then
   systemctl enable avahi-daemon
-  # Point 4: robust nsswitch.conf update
+  # robust nsswitch.conf update
   if ! grep -q 'mdns4_minimal' /etc/nsswitch.conf 2>/dev/null; then
     sed -ri 's/^(hosts:\s+files)(.*dns.*)$/\1 mdns4_minimal [NOTFOUND=return]\2/' /etc/nsswitch.conf || true
   fi
@@ -408,10 +419,19 @@ if [[ "$CHRONY_ENABLE" == "yes" ]]; then
   systemctl enable chrony
 fi
 
-# Swap
+# Swap (btrfs-safe when root fs is btrfs)
 if [[ "$SWAP_SIZE_GB" != "0" && "$SWAP_SIZE_GB" != "" ]]; then
   if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
-    fallocate -l "${SWAP_SIZE_GB}G" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_SIZE_GB*1024))
+    fsroot=\$(findmnt -no FSTYPE / || echo "")
+    if [[ "\$fsroot" == "btrfs" ]]; then
+      rm -f /swapfile
+      truncate -s 0 /swapfile
+      chattr +C /swapfile || true
+      btrfs property set /swapfile compression none || true
+      dd if=/dev/zero of=/swapfile bs=1M count=\$((SWAP_SIZE_GB*1024)) status=progress
+    else
+      fallocate -l "\${SWAP_SIZE_GB}G" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=\$((SWAP_SIZE_GB*1024)) status=progress
+    fi
     chmod 600 /swapfile
     mkswap /swapfile
     echo "/swapfile none swap defaults 0 0" >> /etc/fstab
@@ -425,17 +445,17 @@ fi
 
 # Boot config tweaks
 BOOTCFG="/boot/config.txt"
-touch "$BOOTCFG"
-if grep -q '^gpu_mem=' "$BOOTCFG"; then
-  sed -i "s/^gpu_mem=.*/gpu_mem=$GPU_MEM/" "$BOOTCFG"
+touch "\$BOOTCFG"
+if grep -q '^gpu_mem=' "\$BOOTCFG"; then
+  sed -i "s/^gpu_mem=.*/gpu_mem=$GPU_MEM/" "\$BOOTCFG"
 else
-  echo "gpu_mem=$GPU_MEM" >> "$BOOTCFG"
+  echo "gpu_mem=$GPU_MEM" >> "\$BOOTCFG"
 fi
 if [[ "$ENABLE_SPI" == "yes" ]]; then
-  grep -q '^dtparam=spi=on' "$BOOTCFG" || echo "dtparam=spi=on" >> "$BOOTCFG"
+  grep -q '^dtparam=spi=on' "\$BOOTCFG" || echo "dtparam=spi=on" >> "\$BOOTCFG"
 fi
 if [[ "$ENABLE_I2C" == "yes" ]]; then
-  grep -q '^dtparam=i2c_arm=on' "$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "$BOOTCFG"
+  grep -q '^dtparam=i2c_arm=on' "\$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "\$BOOTCFG"
 fi
 
 # Enable bootloader if requested (package installed earlier)
@@ -455,7 +475,7 @@ EOF
 finish() { sync; umount -R "$SDMOUNT" || true; dialog --msgbox "Installation complete." "$HEIGHT" "$WIDTH"; }
 
 show_logo
-sleep 5
+sleepsleep 5
 clear
 ensure_prereqs
 select_drive
