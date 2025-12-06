@@ -8,5 +8,3 @@ Type=oneshot
 ExecStart=/root/auto-install.sh
 RemainAfterExit=yes
 ConditionPathExists=!/root/.installer_done
-
-[[Install]
