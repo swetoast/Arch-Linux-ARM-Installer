@@ -68,7 +68,7 @@ Arch Linux ARM Installer
 EOF
 }
 
-dialog --msgbox "$(show_logo)" 25 80
+show_logo
 sleep 5
 clear
 
