@@ -88,24 +88,31 @@ compute_fs_flags_for_target() {
   [[ -r "$q/rotational" ]] && rotational=$(cat "$q/rotational" 2>/dev/null || echo 1)
   [[ -r "$q/discard_max_bytes" ]] && discard_max=$(cat "$q/discard_max_bytes" 2>/dev/null || echo 0)
   [[ -r "$q/discard_granularity" ]] && discard_gran=$(cat "$q/discard_granularity" 2>/dev/null || echo 0)
+
   export TARGET_ROTATIONAL="$rotational"
   export TARGET_DISCARD_SUPPORTED="no"
   if [[ "$discard_max" -gt 0 || "$discard_gran" -gt 0 ]]; then
     export TARGET_DISCARD_SUPPORTED="yes"
   fi
-  export EXT4_MKFS_ARGS="-F -O metadata_csum,64bit -E lazy_itable_init=1,lazy_journal_init=1"
+
+  # mkfs argument arrays (quote comma-containing values to satisfy SC2054)
+  EXT4_MKFS_ARGS=( -F -O "metadata_csum,64bit" -E "lazy_itable_init=1,lazy_journal_init=1" )
+  BTRFS_MKFS_ARGS=( -f )
+  XFS_MKFS_ARGS=( -f -m "crc=1,reflink=1" -n ftype=1 )
+
+  # mount option strings
   local ext4_opts="defaults,noatime,lazytime,commit=120"
   if [[ "$TARGET_ROTATIONAL" == "0" && "$TARGET_DISCARD_SUPPORTED" == "yes" && "$TRIM_ENABLE" == "yes" ]]; then
     ext4_opts="${ext4_opts},discard"
   fi
   export EXT4_MOUNT_OPTS="$ext4_opts"
-  export BTRFS_MKFS_ARGS="-f"
+
   local btrfs_opts="compress=zstd,noatime,space_cache=v2"
   if [[ "$TARGET_ROTATIONAL" == "0" ]]; then
     btrfs_opts="${btrfs_opts},ssd"
   fi
   export BTRFS_MOUNT_OPTS="$btrfs_opts"
-  export XFS_MKFS_ARGS="-f -m crc=1,reflink=1 -n ftype=1"
+
   local xfs_opts="defaults,noatime,inode64"
   if [[ "$TARGET_ROTATIONAL" == "0" && "$TARGET_DISCARD_SUPPORTED" == "yes" && "$TRIM_ENABLE" == "yes" ]]; then
     xfs_opts="${xfs_opts},discard"
@@ -149,7 +156,7 @@ assert_cross_arch_chroot() {
 }
 
 select_drive() {
-  mapfile -t DEVICES << <(
+  mapfile -t DEVICES < <(
     lsblk -dn -o NAME,SIZE,MODEL \
     | grep -Ev '^(loop|zram)' \
     | awk '{print $1 " " $2 " " substr($0, index($0,$3))}'
@@ -227,14 +234,14 @@ EOF
   compute_fs_flags_for_target
   case "$ROOTFS" in
     ext4)
-      mkfs.ext4 $EXT4_MKFS_ARGS "$SDPARTROOT"
+      mkfs.ext4 "${EXT4_MKFS_ARGS[@]}" "$SDPARTROOT"
       if [[ "$EXT4_TUNE" == "yes" ]]; then tune2fs -m 0 "$SDPARTROOT" || true; fi
       ;;
     btrfs)
-      mkfs.btrfs $BTRFS_MKFS_ARGS "$SDPARTROOT"
+      mkfs.btrfs "${BTRFS_MKFS_ARGS[@]}" "$SDPARTROOT"
       ;;
     xfs)
-      mkfs.xfs $XFS_MKFS_ARGS "$SDPARTROOT"
+      mkfs.xfs "${XFS_MKFS_ARGS[@]}" "$SDPARTROOT"
       ;;
   esac
 }
@@ -366,7 +373,8 @@ configure_system_chroot() {
   assert_cross_arch_chroot
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
 
-  sanitized_ssid=$(echo "$WIFI_SSID" | sed 's/[^A-Za-z0-9._-]/_/g' || true)
+  # Use parameter expansion to sanitize SSID (fix SC2001)
+  sanitized_ssid=${WIFI_SSID//[^A-Za-z0-9._-]/_}
   WIFI_COUNTRY_UPPER=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
 
   cat > "$SDMOUNT/tmp/setup-system.sh" <<EOF
@@ -496,21 +504,26 @@ if [[ "$CHRONY_ENABLE" == "yes" ]]; then
   systemctl enable chrony
 fi
 
+# Create swap file only when requested (non-zero), including on btrfs
 if [[ "$SWAP_SIZE_GB" != "0" && "$SWAP_SIZE_GB" != "" ]]; then
-  if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
-    fsroot=$(findmnt -no FSTYPE / || echo "")
-    if [[ "$fsroot" == "btrfs" ]]; then
+  if [[ "$(findmnt -no FSTYPE / || echo "")" == "btrfs" ]]; then
+    if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
       rm -f /swapfile
       truncate -s 0 /swapfile
       chattr +C /swapfile || true
       btrfs property set /swapfile compression none || true
       dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_SIZE_GB*1024)) status=progress
-    else
-      fallocate -l "${SWAP_SIZE_GB}G" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_SIZE_GB*1024)) status=progress
+      chmod 600 /swapfile
+      mkswap /swapfile
+      echo "/swapfile none swap defaults 0 0" >> /etc/fstab
     fi
-    chmod 600 /swapfile
-    mkswap /swapfile
-    echo "/swapfile none swap defaults 0 0" >> /etc/fstab
+  else
+    if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
+      fallocate -l "${SWAP_SIZE_GB}G" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_SIZE_GB*1024)) status=progress
+      chmod 600 /swapfile
+      mkswap /swapfile
+      echo "/swapfile none swap defaults 0 0" >> /etc/fstab
+    fi
   fi
 fi
 
@@ -558,7 +571,7 @@ ensure_prereqs
 select_drive
 select_fs
 select_kernel
-collect_system_info
+collectcollect_system_info
 verify_target_safe
 partition_format
 install_rootfs
