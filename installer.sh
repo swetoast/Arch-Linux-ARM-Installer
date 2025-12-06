@@ -3,29 +3,6 @@ set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then echo "Run as root."; exit 1; fi
 
-# thanks to https://gist.github.com/LnLcFlx/18eb10bc74ed9e497d0fedc69468f933
-
-echo -e "\033[38;2;23;147;209m                   ▄
-                  ▟█▙
-                 ▟███▙
-                ▟█████▙
-               ▟███████▙
-              ▂▔▀▜██████▙
-             ▟██▅▂▝▜█████▙
-            ▟█████████████▙
-           ▟███████████████▙
-          ▟█████████████████▙
-         ▟███████████████████▙
-        ▟█████████▛▀▀▜████████▙
-       ▟████████▛      ▜███████▙
-      ▟█████████        ████████▙
-     ▟██████████        █████▆▅▄▃▂
-    ▟██████████▛        ▜█████████▙
-   ▟██████▀▀▀              ▀▀██████▙
-  ▟███▀▘                       ▝▀███▙
- ▟▛▀                               ▀▜▙\033[0m"
-
-
 HEIGHT=20
 WIDTH=70
 MENU_HEIGHT=10
@@ -62,6 +39,38 @@ BOOTLOADER_INSTALL="no"
 GPU_MEM="128"
 ENABLE_SPI="no"
 ENABLE_I2C="no"
+
+# Logo function
+# Thanks to https://gist.github.com/LnLcFlx/18eb10bc74ed9e497d0fedc69468f933
+show_logo() {
+cat <<'EOF'
+                   ▄
+                  ▟█▙
+                 ▟███▙
+                ▟█████▙
+               ▟███████▙
+              ▂▔▀▜██████▙
+             ▟██▅▂▝▜█████▙
+            ▟█████████████▙
+           ▟███████████████▙
+          ▟█████████████████▙
+         ▟███████████████████▙
+        ▟█████████▛▀▀▜████████▙
+       ▟████████▛      ▜███████▙
+      ▟█████████        ████████▙
+     ▟██████████        █████▆▅▄▃▂
+    ▟██████████▛        ▜█████████▙
+   ▟██████▀▀▀              ▀▀██████▙
+  ▟███▀▘                       ▝▀███▙
+ ▟▛▀                               ▀▜▙
+
+Arch Linux ARM Installer
+EOF
+}
+
+dialog --msgbox "$(show_logo)" 25 80
+sleep 5
+clear
 
 cleanup_mounts() { umount -R "$SDMOUNT" 2>/dev/null || true; }
 trap cleanup_mounts EXIT
