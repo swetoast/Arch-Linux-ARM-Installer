@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build a Raspberry Pi bootable image that auto-runs /root/installer.sh at first boot.
-# - Uses HTTP for Arch Linux ARM rootfs (with GPG/MD5 verification).
+# - Downloads Arch Linux ARM rootfs via HTTP
+# - Verifies integrity using MD5 only (no GPG)
 # - Produces artifacts/<image>.img.xz
 set -euo pipefail
 
@@ -30,20 +31,21 @@ MNT_ROOT="/tmp/piusb/root"
 ###
 # ---------- Preflight ----------
 need() { command -v "$1" >/dev/null || { echo "Missing dependency: $1"; exit 1; }; }
+has()  { command -v "$1" >/dev/null; }
 
 # Core tools used on ubuntu-latest runners
 need curl
-need gnupg
 need rsync
 need xz
 need sfdisk
 need losetup
 need mkfs.vfat
 need mkfs.ext4
-# At least one extractor (prefer bsdtar)
+
+# Extractor: prefer bsdtar; fallback to GNU tar
 EXTRACTOR="bsdtar"
-if ! command -v bsdtar >/dev/null 2>&1; then
-  if command -v tar >/dev/null 2>&1; then
+if ! has bsdtar; then
+  if has tar; then
     EXTRACTOR="tar"
   else
     echo "Need either bsdtar (libarchive-tools) or GNU tar installed."
@@ -103,34 +105,23 @@ sudo mount "$BOOT_PART" "$MNT_BOOT"
 sudo mount "$ROOT_PART" "$MNT_ROOT"
 
 ###
-# ---------- Download & verify Arch Linux ARM rootfs (HTTP) ----------
+# ---------- Download & verify Arch Linux ARM rootfs (HTTP + MD5) ----------
 cd /tmp
 BASE="$(basename "$DISTURL")"
 echo ":: Downloading over HTTP: $DISTURL"
 # Use IPv4 and retries for robustness in CI
 curl -4 -fSLo "$BASE"        --retry 5 --retry-connrefused --retry-delay 2 "$DISTURL"
-curl -4 -fSLo "${BASE}.sig"  --retry 5 --retry-connrefused --retry-delay 2 "${DISTURL}.sig" || true
-curl -4 -fSLo "${BASE}.md5"  --retry 5 --retry-connrefused --retry-delay 2 "${DISTURL}.md5" || true
+curl -4 -fSLo "${BASE}.md5"  --retry 5 --retry-connrefused --retry-delay 2 "${DISTURL}.md5"
 
-if [[ ! -f "/tmp/${BASE}.sig" && ! -f "/tmp/${BASE}.md5" ]]; then
-  echo "ERROR: Neither GPG signature nor MD5 checksum were available for ${BASE}."
-  echo "       Refusing to proceed without ANY integrity check."
+# Require MD5 to proceed
+if [[ ! -f "/tmp/${BASE}.md5" ]]; then
+  echo "ERROR: MD5 checksum file missing for ${BASE}. Refusing to proceed."
+  echo "       Expected at: ${DISTURL}.md5"
   exit 1
 fi
 
-if [[ -f "/tmp/${BASE}.sig" ]]; then
-  echo ":: Verifying GPG signature ..."
-  gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6 \
-    || {
-      echo ":: Keyserver failed; using static keyring fallback ..."
-      curl -fsSL https://raw.githubusercontent.com/archlinuxarm/archlinuxarm-keyring/master/archlinuxarm.gpg -o archlinuxarm.gpg
-      gpg --import archlinuxarm.gpg
-    }
-  gpg --verify "/tmp/${BASE}.sig" "/tmp/${BASE}"
-elif [[ -f "/tmp/${BASE}.md5" ]]; then
-  echo ":: Verifying MD5 checksum ..."
-  md5sum -c "/tmp/${BASE}.md5"
-fi
+echo ":: Verifying MD5 checksum ..."
+md5sum -c "/tmp/${BASE}.md5"
 
 ###
 # ---------- Extract rootfs into / ----------
@@ -175,7 +166,7 @@ sudo ln -sf /etc/systemd/system/auto-install.service \
            "${MNT_ROOT}/etc/systemd/system/multi-user.target.wants/auto-install.service"
 
 ###
-# ---------- Cleanup and compress ----------
+## ---------- Cleanup and compress ----------
 echo ":: Finalizing image ..."
 sync
 sudo umount "$MNT_BOOT" "$MNT_ROOT"
@@ -184,4 +175,3 @@ rm -rf /tmp/piusb
 
 echo ":: Compressing image ..."
 xz -T0 -z -9 -c "$IMG" > "${OUTDIR}/${IMAGE_NAME}.img.xz"
-echo ":: Done -> ${OUTDIR}/${IMAGE_NAME}.img.xz"
