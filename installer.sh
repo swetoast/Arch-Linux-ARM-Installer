@@ -74,7 +74,7 @@ cleanup_mounts() { umount -R "$SDMOUNT" 2>/dev/null || true; }
 trap cleanup_mounts EXIT
 
 ensure_prereqs() {
-  for cmd in dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm sed awk grep; do
+  for cmd in dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm sed awk grep gpg md5sum; do
     command -v "$cmd" >/dev/null || { echo "Missing $cmd"; exit 1; }
   done
   mkdir -p "$SDMOUNT" "$DOWNLOADDIR"
@@ -175,9 +175,25 @@ EOF
 
 install_rootfs() {
   cd "$DOWNLOADDIR"
-  [[ -f "$(basename "$DISTURL")" ]] || curl -JLO "$DISTURL"
+  base="$(basename "$DISTURL")"
+  md5url="${DISTURL}.md5"
+  sigurl="${DISTURL}.sig"
+
+  [[ -f "$base" ]] || curl -JLO "$DISTURL"
+
+  curl -f -O "$md5url" || curl -f -O "$(dirname "$DISTURL")/${base}.md5"
+  curl -f -O "$sigurl" || curl -f -O "$(dirname "$DISTURL")/${base}.sig"
+
+  md5sum -c "${base}.md5"
+
+
+  gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6 \
+    || { curl -fsSL https://raw.githubusercontent.com/archlinuxarm/archlinuxarm-keyring/master/archlinuxarm.gpg -o archlinuxarm.gpg && gpg --import archlinuxarm.gpg; }
+
+  gpg --verify "${base}.sig" "$base"
+
   mount "$SDPARTROOT" "$SDMOUNT"; mkdir -p "$SDMOUNT/boot"; mount "$SDPARTBOOT" "$SDMOUNT/boot"
-  bsdtar -xpf "$DOWNLOADDIR/$(basename "$DISTURL")" -C "$SDMOUNT"
+  bsdtar -xpf "$DOWNLOADDIR/$base" -C "$SDMOUNT"
 }
 
 configure_fstab() {
@@ -332,7 +348,6 @@ NET
 EnableNetworkConfiguration=true
 RegulatoryDomain=$WIFI_COUNTRY_UPPER
 CONF
-    # Store PSK under /var/lib/iwd
     mkdir -p /var/lib/iwd
     cat > /var/lib/iwd/$sanitized_ssid.psk <<WIFI
 [Security]
@@ -344,7 +359,6 @@ WIFI
 else
   systemctl enable NetworkManager
   if [[ -n "$WIFI_SSID" ]]; then
-    # persist regulatory domain via a oneshot service
     iw reg set $WIFI_COUNTRY_UPPER || true
     cat > /etc/systemd/system/regdomain.service <<SRV
 [Unit]
@@ -357,7 +371,6 @@ ExecStart=/usr/bin/iw reg set $WIFI_COUNTRY_UPPER
 WantedBy=multi-user.target
 SRV
     systemctl enable regdomain.service || true
-    # Pre-provision NM profile (portable; no hardcoded interface name)
     mkdir -p /etc/NetworkManager/system-connections
     cat > "/etc/NetworkManager/system-connections/${sanitized_ssid}.nmconnection" <<NM
 [connection]
@@ -388,7 +401,6 @@ if [[ "$SSH_ENABLE" == "yes" ]]; then
   systemctl enable sshd
   if [[ "$SSH_KEYONLY" == "yes" ]]; then
     sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config || true
-    # Seed authorized_keys from /root/seed_authorized_key.pub if present
     mkdir -p "/home/$USERNAME/.ssh"
     chmod 700 "/home/$USERNAME/.ssh"
     if [[ -f /root/seed_authorized_key.pub ]]; then
@@ -407,7 +419,6 @@ fi
 # Avahi/mDNS
 if [[ "$AVAHI_ENABLE" == "yes" ]]; then
   systemctl enable avahi-daemon
-  # robust nsswitch.conf update
   if ! grep -q 'mdns4_minimal' /etc/nsswitch.conf 2>/dev/null; then
     sed -ri 's/^(hosts:\s+files)(.*dns.*)$/\1 mdns4_minimal [NOTFOUND=return]\2/' /etc/nsswitch.conf || true
   fi
@@ -475,9 +486,9 @@ EOF
 finish() { sync; umount -R "$SDMOUNT" || true; dialog --msgbox "Installation complete." "$HEIGHT" "$WIDTH"; }
 
 show_logo
-sleepsleep 5
+sleep 5
 clear
-ensure_prereqs
+ensureensure_prereqs
 select_drive
 select_fs
 select_kernel
