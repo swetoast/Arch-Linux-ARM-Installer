@@ -149,7 +149,7 @@ assert_cross_arch_chroot() {
 }
 
 select_drive() {
-  mapfile -t DEVICES < <(
+  mapfile -t DEVICES << <(
     lsblk -dn -o NAME,SIZE,MODEL \
     | grep -Ev '^(loop|zram)' \
     | awk '{print $1 " " $2 " " substr($0, index($0,$3))}'
@@ -391,7 +391,7 @@ echo "root:$ROOTPASS" | chpasswd
 
 # delete 'alarm' only if a proper admin user exists and is in wheel, and chosen username isn't 'alarm'
 if [[ "$USERNAME" != "alarm" ]]; then
-  if id "$USERNAME" >/dev/null 2>&1 && id -nG "$USERNAME" | tr ' ' '\\n' | grep -qx wheel; then
+  if id "$USERNAME" >/dev/null 2>&1 && id -nG "$USERNAME" | tr ' ' '\n' | grep -qx wheel; then
     if id alarm >/dev/null 2>&1; then userdel -r alarm || true; fi
   else
     echo "WARNING: user '$USERNAME' not fully provisioned; retaining 'alarm' account." >&2
@@ -527,7 +527,7 @@ else
 fi
 if [[ "$ENABLE_SPI" == "yes" ]]; then
   grep -q '^dtparam=spi=on' "$BOOTCFG" || echo "dtparam=spi=on" >> "$BOOTCFG"
-}
+fi
 if [[ "$ENABLE_I2C" == "yes" ]]; then
   grep -q '^dtparam=i2c_arm=on' "$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "$BOOTCFG"
 fi
@@ -542,7 +542,7 @@ EOF
   arch-chroot "$SDMOUNT" /tmp/setup-system.sh
   rm -f "$SDMOUNT/tmp/setup-system.sh"
 
-  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
+  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
 finish() {
