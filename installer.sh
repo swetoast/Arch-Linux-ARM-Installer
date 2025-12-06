@@ -1,3 +1,4 @@
+
 #!/bin/bash
 set -euo pipefail
 
@@ -127,7 +128,7 @@ assert_cross_arch_chroot() {
 select_drive() {
   mapfile -t DEVICES < <(lsblk -dn -o NAME,SIZE,MODEL | awk '{print $1 " " $2 " " substr($0, index($0,$3))}')
   ((${#DEVICES[@]})) || { echo "No block devices found."; exit 1; }
-  MENU_ITEMS=(); for i in "${!DEVICES[@]}"; do MENU_ITEMS+=("$i" "${DEVICES[$i]}"); done
+  MENU_ITEMS=(); for i in "${!DEVICES[@]}"; do MENU_ITEMS+=("$i" "${DEVICES[$i]}"); end
   CHOICE=$(dialog --clear --stdout --menu "Select target drive" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" "${MENU_ITEMS[@]}") || exit 1
   SDDEV="/dev/$(echo "${DEVICES[$CHOICE]}" | awk '{print $1}')"
   if [[ "$SDDEV" =~ (mmcblk|nvme) ]]; then SDPARTBOOT="${SDDEV}p1"; SDPARTROOT="${SDDEV}p2"; else SDPARTBOOT="${SDDEV}1"; SDPARTROOT="${SDDEV}2"; fi
@@ -360,6 +361,15 @@ echo "$HOSTNAME" > /etc/hostname
 if ! id "$USERNAME" >/dev/null 2>&1; then useradd -m -G wheel -s /bin/bash "$USERNAME"; fi
 echo "$USERNAME:$USERPASS" | chpasswd
 echo "root:$ROOTPASS" | chpasswd
+
+# delete 'alarm' only if a proper admin user exists and is in wheel, and chosen username isn't 'alarm'
+if [[ "$USERNAME" != "alarm" ]]; then
+  if id "$USERNAME" >/dev/null 2>&1 && id -nG "$USERNAME" | tr ' ' '\\n' | grep -qx wheel; then
+    if id alarm >/dev/null 2>&1; then userdel -r alarm || true; fi
+  else
+    echo "WARNING: user '$USERNAME' not fully provisioned; retaining 'alarm' account." >&2
+  fi
+fi
 
 if [[ "$NETWORKING" == "systemd-networkd" ]]; then
   systemctl enable systemd-networkd systemd-resolved
