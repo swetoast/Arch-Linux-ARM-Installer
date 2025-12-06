@@ -68,10 +68,6 @@ Arch Linux ARM Installer
 EOF
 }
 
-show_logo
-sleep 5
-clear
-
 cleanup_mounts() { umount -R "$SDMOUNT" 2>/dev/null || true; }
 trap cleanup_mounts EXIT
 
@@ -419,6 +415,9 @@ EOF
 
 finish() { sync; umount -R "$SDMOUNT" || true; dialog --msgbox "Installation complete." "$HEIGHT" "$WIDTH"; }
 
+show_logo
+sleep 5
+clear
 ensure_prereqs
 select_drive
 select_fs
