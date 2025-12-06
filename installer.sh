@@ -5,7 +5,7 @@ if [[ $EUID -ne 0 ]]; then echo "Run as root."; exit 1; fi
 
 # thanks to https://gist.github.com/LnLcFlx/18eb10bc74ed9e497d0fedc69468f933
 
-\033[38;2;23;147;209m                   ▄
+echo -e "\033[38;2;23;147;209m                   ▄
                   ▟█▙
                  ▟███▙
                 ▟█████▙
@@ -23,7 +23,7 @@ if [[ $EUID -ne 0 ]]; then echo "Run as root."; exit 1; fi
     ▟██████████▛        ▜█████████▙
    ▟██████▀▀▀              ▀▀██████▙
   ▟███▀▘                       ▝▀███▙
- ▟▛▀                               ▀▜▙
+ ▟▛▀                               ▀▜▙\033[0m"
 
 
 HEIGHT=20
