@@ -1,9 +1,12 @@
+
 name: Build Raspberry Pi live image
 
 on:
   push:
-    branches: [ main ]
-    tags:     [ 'v*' ]
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -22,29 +25,33 @@ jobs:
             gnupg libarchive-tools xz-utils \
             dosfstools e2fsprogs btrfs-progs xfsprogs \
             util-linux rsync curl
+          # ensure loop module is present
           sudo modprobe loop || true
 
       - name: Make scripts executable
-        run: chmod +x scripts/build-image.sh scripts/auto-install.sh installer.sh
+        run: |
+          chmod +x scripts/build-image.sh
+          chmod +x scripts/auto-install.sh
+          chmod +x installer.sh
 
       - name: Build image
         env:
           IMAGE_NAME: rpi-live-archarm-${{ github.run_number }}
-          IMAGE_SIZE_GB: "4"
-          BOOT_MB: "256"
-          ROOTFS: "ext4"
-          DISTURL: "https://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz"
-        run: ./scripts/build-image.sh
+          IMAGE_SIZE_GB: '4'
+          BOOT_MB: '256'
+          ROOTFS: 'ext4'
+          DISTURL: 'https://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz'
+        run: |
+          ./scripts/build-image.sh
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses:        uses: actions/upload-artifact@v4
         with:
           name: rpi-live-archarm
           path: artifacts/*.img.xz
-          compression-level: 0
 
       - name: Create release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
-               with:
+        with:
           files: artifacts/*.img.xz
