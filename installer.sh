@@ -125,8 +125,12 @@ assert_cross_arch_chroot() {
 }
 
 select_drive() {
-  mapfile -t DEVICES < <(lsblk -dn -o NAME,SIZE,MODEL | awk '{print $1 " " $2 " " substr($0, index($0,$3))}')
-  ((${#DEVICES[@]})) || { echo "No block devices found."; exit 1; }
+  mapfile -t DEVICES < <(
+    lsblk -dn -o NAME,SIZE,MODEL \
+    | grep -Ev '^(loop|zram)' \
+    | awk '{print $1 " " $2 " " substr($0, index($0,$3))}'
+  )
+  ((${#DEVICES[@]})) || { echo "No suitable block devices found."; exit 1; }
   MENU_ITEMS=(); for i in "${!DEVICES[@]}"; do MENU_ITEMS+=("$i" "${DEVICES[$i]}"); done
   CHOICE=$(dialog --clear --stdout --menu "Select target drive" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" "${MENU_ITEMS[@]}") || exit 1
   SDDEV="/dev/$(echo "${DEVICES[$CHOICE]}" | awk '{print $1}')"
@@ -470,15 +474,15 @@ fi
 
 if [[ "$SWAP_SIZE_GB" != "0" && "$SWAP_SIZE_GB" != "" ]]; then
   if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
-    fsroot=\$(findmnt -no FSTYPE / || echo "")
-    if [[ "\$fsroot" == "btrfs" ]]; then
+    fsroot=$(findmnt -no FSTYPE / || echo "")
+    if [[ "$fsroot" == "btrfs" ]]; then
       rm -f /swapfile
       truncate -s 0 /swapfile
       chattr +C /swapfile || true
       btrfs property set /swapfile compression none || true
-      dd if=/dev/zero of=/swapfile bs=1M count=\$((SWAP_SIZE_GB*1024)) status=progress
+      dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_SIZE_GB*1024)) status=progress
     else
-      fallocate -l "\${SWAP_SIZE_GB}G" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=\$((SWAP_SIZE_GB*1024)) status=progress
+      fallocate -l "${SWAP_SIZE_GB}G" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_SIZE_GB*1024)) status=progress
     fi
     chmod 600 /swapfile
     mkswap /swapfile
@@ -491,17 +495,17 @@ if [[ "$TRIM_ENABLE" == "yes" ]]; then
 fi
 
 BOOTCFG="/boot/config.txt"
-touch "\$BOOTCFG"
-if grep -q '^gpu_mem=' "\$BOOTCFG"; then
-  sed -i "s/^gpu_mem=.*/gpu_mem=$GPU_MEM/" "\$BOOTCFG"
+touch "$BOOTCFG"
+if grep -q '^gpu_mem=' "$BOOTCFG"; then
+  sed -i "s/^gpu_mem=.*/gpu_mem=$GPU_MEM/" "$BOOTCFG"
 else
-  echo "gpu_mem=$GPU_MEM" >> "\$BOOTCFG"
+  echo "gpu_mem=$GPU_MEM" >> "$BOOTCFG"
 fi
 if [[ "$ENABLE_SPI" == "yes" ]]; then
-  grep -q '^dtparam=spi=on' "\$BOOTCFG" || echo "dtparam=spi=on" >> "\$BOOTCFG"
+  grep -q '^dtparam=spi=on' "$BOOTCFG" || echo "dtparam=spi=on" >> "$BOOTCFG"
 fi
 if [[ "$ENABLE_I2C" == "yes" ]]; then
-  grep -q '^dtparam=i2c_arm=on' "\$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "\$BOOTCFG"
+  grep -q '^dtparam=i2c_arm=on' "$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "$BOOTCFG"
 fi
 
 if [[ "$BOOTLOADER_INSTALL" == "yes" ]]; then
