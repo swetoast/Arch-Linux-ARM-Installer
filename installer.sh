@@ -127,7 +127,7 @@ assert_cross_arch_chroot() {
 select_drive() {
   mapfile -t DEVICES < <(lsblk -dn -o NAME,SIZE,MODEL | awk '{print $1 " " $2 " " substr($0, index($0,$3))}')
   ((${#DEVICES[@]})) || { echo "No block devices found."; exit 1; }
-  MENU_ITEMS=(); for i in "${!DEVICES[@]}"; do MENU_ITEMS+=("$i" "${DEVICES[$i]}"); end
+  MENU_ITEMS=(); for i in "${!DEVICES[@]}"; do MENU_ITEMS+=("$i" "${DEVICES[$i]}"); done
   CHOICE=$(dialog --clear --stdout --menu "Select target drive" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" "${MENU_ITEMS[@]}") || exit 1
   SDDEV="/dev/$(echo "${DEVICES[$CHOICE]}" | awk '{print $1}')"
   if [[ "$SDDEV" =~ (mmcblk|nvme) ]]; then SDPARTBOOT="${SDDEV}p1"; SDPARTROOT="${SDDEV}p2"; else SDPARTBOOT="${SDDEV}1"; SDPARTROOT="${SDDEV}2"; fi
@@ -277,7 +277,7 @@ pacman -Sy --noconfirm e2fsprogs
 EOF
   elif [[ "$ROOTFS" == "btrfs" ]]; then
     cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
-pacman -Sy --noconfirm btrfs-progs
+pacman -Sy --noconfirm btrfs-progs e2fsprogs
 EOF
   elif [[ "$ROOTFS" == "xfs" ]]; then
     cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
@@ -383,16 +383,16 @@ NET
 
   if [[ -n "$WIFI_SSID" ]]; then
     systemctl enable iwd
+    mkdir -p /var/lib/iwd
     mkdir -p /etc/iwd
     cat > /etc/iwd/main.conf <<CONF
 [General]
 EnableNetworkConfiguration=true
 RegulatoryDomain=$WIFI_COUNTRY_UPPER
 CONF
-    mkdir -p /var/lib/iwd
     cat > /var/lib/iwd/$sanitized_ssid.psk <<WIFI
 [Security]
-PreSharedKey=$WIFI_PASS
+Passphrase=$WIFI_PASS
 WIFI
     chmod 600 /var/lib/iwd/$sanitized_ssid.psk || true
   fi
