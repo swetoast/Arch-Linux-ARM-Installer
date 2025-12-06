@@ -1,3 +1,4 @@
+
 #!/bin/bash
 set -euo pipefail
 
@@ -40,8 +41,6 @@ GPU_MEM="128"
 ENABLE_SPI="no"
 ENABLE_I2C="no"
 
-# Logo function
-# Thanks to https://gist.github.com/LnLcFlx/18eb10bc74ed9e497d0fedc69468f933
 show_logo() {
   clear
   echo -e "\033[38;2;23;147;209m
@@ -77,6 +76,42 @@ ensure_prereqs() {
     command -v "$cmd" >/dev/null || { echo "Missing $cmd"; exit 1; }
   done
   mkdir -p "$SDMOUNT" "$DOWNLOADDIR"
+}
+
+compute_fs_flags_for_target() {
+  local parent
+  parent=$(lsblk -no PKNAME "$SDPARTROOT" 2>/dev/null || true)
+  if [[ -z "$parent" ]]; then
+    parent=$(basename "$(readlink -f "$SDPARTROOT")" | sed -E 's/p?[0-9]+$//')
+  fi
+  local q="/sys/block/$parent/queue"
+  local rotational=1 discard_max=0 discard_gran=0
+  [[ -r "$q/rotational" ]] && rotational=$(cat "$q/rotational" 2>/dev/null || echo 1)
+  [[ -r "$q/discard_max_bytes" ]] && discard_max=$(cat "$q/discard_max_bytes" 2>/dev/null || echo 0)
+  [[ -r "$q/discard_granularity" ]] && discard_gran=$(cat "$q/discard_granularity" 2>/dev/null || echo 0)
+  export TARGET_ROTATIONAL="$rotational"
+  export TARGET_DISCARD_SUPPORTED="no"
+  if [[ "$discard_max" -gt 0 || "$discard_gran" -gt 0 ]]; then
+    export TARGET_DISCARD_SUPPORTED="yes"
+  fi
+  export EXT4_MKFS_ARGS="-F -O metadata_csum,64bit -E lazy_itable_init=1,lazy_journal_init=1"
+  local ext4_opts="defaults,noatime,lazytime,commit=120"
+  if [[ "$TARGET_ROTATIONAL" == "0" && "$TARGET_DISCARD_SUPPORTED" == "yes" && "$TRIM_ENABLE" == "yes" ]]; then
+    ext4_opts="${ext4_opts},discard"
+  fi
+  export EXT4_MOUNT_OPTS="$ext4_opts"
+  export BTRFS_MKFS_ARGS="-f"
+  local btrfs_opts="compress=zstd,noatime,space_cache=v2"
+  if [[ "$TARGET_ROTATIONAL" == "0" ]]; then
+    btrfs_opts="${btrfs_opts},ssd"
+  fi
+  export BTRFS_MOUNT_OPTS="$btrfs_opts"
+  export XFS_MKFS_ARGS="-f -m crc=1,reflink=1 -n ftype=1"
+  local xfs_opts="defaults,noatime,inode64"
+  if [[ "$TARGET_ROTATIONAL" == "0" && "$TARGET_DISCARD_SUPPORTED" == "yes" && "$TRIM_ENABLE" == "yes" ]]; then
+    xfs_opts="${xfs_opts},discard"
+  fi
+  export XFS_MOUNT_OPTS="$xfs_opts"
 }
 
 assert_cross_arch_chroot() {
@@ -162,13 +197,18 @@ partition_format() {
 EOF
   partprobe "$SDDEV" || true; udevadm settle || true
   mkfs.vfat -F 32 "$SDPARTBOOT"
+  compute_fs_flags_for_target
   case "$ROOTFS" in
     ext4)
-      mkfs.ext4 -F "$SDPARTROOT"
+      mkfs.ext4 $EXT4_MKFS_ARGS "$SDPARTROOT"
       if [[ "$EXT4_TUNE" == "yes" ]]; then tune2fs -m 0 "$SDPARTROOT" || true; fi
       ;;
-    btrfs) mkfs.btrfs -f "$SDPARTROOT" ;;
-    xfs) mkfs.xfs -f "$SDPARTROOT" ;;
+    btrfs)
+      mkfs.btrfs $BTRFS_MKFS_ARGS "$SDPARTROOT"
+      ;;
+    xfs)
+      mkfs.xfs $XFS_MKFS_ARGS "$SDPARTROOT"
+      ;;
   esac
 }
 
@@ -177,20 +217,13 @@ install_rootfs() {
   base="$(basename "$DISTURL")"
   md5url="${DISTURL}.md5"
   sigurl="${DISTURL}.sig"
-
   [[ -f "$base" ]] || curl -JLO "$DISTURL"
-
   curl -f -O "$md5url" || curl -f -O "$(dirname "$DISTURL")/${base}.md5"
   curl -f -O "$sigurl" || curl -f -O "$(dirname "$DISTURL")/${base}.sig"
-
   md5sum -c "${base}.md5"
-
-
   gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6 \
     || { curl -fsSL https://raw.githubusercontent.com/archlinuxarm/archlinuxarm-keyring/master/archlinuxarm.gpg -o archlinuxarm.gpg && gpg --import archlinuxarm.gpg; }
-
   gpg --verify "${base}.sig" "$base"
-
   mount "$SDPARTROOT" "$SDMOUNT"; mkdir -p "$SDMOUNT/boot"; mount "$SDPARTBOOT" "$SDMOUNT/boot"
   bsdtar -xpf "$DOWNLOADDIR/$base" -C "$SDMOUNT"
 }
@@ -198,9 +231,15 @@ install_rootfs() {
 configure_fstab() {
   root_uuid=$(blkid -s UUID -o value "$SDPARTROOT"); boot_uuid=$(blkid -s UUID -o value "$SDPARTBOOT")
   case "$ROOTFS" in
-    ext4) root_type="ext4"; root_opts="defaults,noatime" ;;
-    btrfs) root_type="btrfs"; root_opts="compress=zstd,ssd,noatime,space_cache=v2" ;;
-    xfs) root_type="xfs"; root_opts="defaults,noatime" ;;
+    ext4)
+      root_type="ext4"; root_opts="${EXT4_MOUNT_OPTS:-defaults,noatime}"
+      ;;
+    btrfs)
+      root_type="btrfs"; root_opts="${BTRFS_MOUNT_OPTS:-compress=zstd,noatime,space_cache=v2}"
+      ;;
+    xfs)
+      root_type="xfs"; root_opts="${XFS_MOUNT_OPTS:-defaults,noatime,inode64}"
+      ;;
   esac
   cat > "$SDMOUNT/etc/fstab" <<EOT
 UUID=$root_uuid  /      $root_type  $root_opts  0 1
@@ -307,27 +346,22 @@ configure_system_chroot() {
 #!/bin/bash
 set -euo pipefail
 
-# Locale and keymap
 sed -i '/^$LOCALE/d' /etc/locale.gen || true
 echo "$LOCALE UTF-8" >> /etc/locale.gen
 locale-gen
 echo "LANG=$LOCALE" > /etc/locale.conf
 echo "KEYMAP=$KEYMAP" > /etc/vconsole.conf
 
-# Timezone and time sync
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
 systemctl enable systemd-timesyncd
 
-# Hostname
 echo "$HOSTNAME" > /etc/hostname
 
-# User + passwords
 if ! id "$USERNAME" >/dev/null 2>&1; then useradd -m -G wheel -s /bin/bash "$USERNAME"; fi
 echo "$USERNAME:$USERPASS" | chpasswd
 echo "root:$ROOTPASS" | chpasswd
 
-# Networking
 if [[ "$NETWORKING" == "systemd-networkd" ]]; then
   systemctl enable systemd-networkd systemd-resolved
   mkdir -p /etc/systemd/network
@@ -395,7 +429,6 @@ NM
   fi
 fi
 
-# SSH
 if [[ "$SSH_ENABLE" == "yes" ]]; then
   systemctl enable sshd
   if [[ "$SSH_KEYONLY" == "yes" ]]; then
@@ -415,7 +448,6 @@ if [[ "$SSH_ENABLE" == "yes" ]]; then
   fi
 fi
 
-# Avahi/mDNS
 if [[ "$AVAHI_ENABLE" == "yes" ]]; then
   systemctl enable avahi-daemon
   if ! grep -q 'mdns4_minimal' /etc/nsswitch.conf 2>/dev/null; then
@@ -423,13 +455,11 @@ if [[ "$AVAHI_ENABLE" == "yes" ]]; then
   fi
 fi
 
-# Chrony
 if [[ "$CHRONY_ENABLE" == "yes" ]]; then
   systemctl disable systemd-timesyncd || true
   systemctl enable chrony
 fi
 
-# Swap (btrfs-safe when root fs is btrfs)
 if [[ "$SWAP_SIZE_GB" != "0" && "$SWAP_SIZE_GB" != "" ]]; then
   if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
     fsroot=\$(findmnt -no FSTYPE / || echo "")
@@ -448,12 +478,10 @@ if [[ "$SWAP_SIZE_GB" != "0" && "$SWAP_SIZE_GB" != "" ]]; then
   fi
 fi
 
-# fstrim
 if [[ "$TRIM_ENABLE" == "yes" ]]; then
   systemctl enable fstrim.timer || true
 fi
 
-# Boot config tweaks
 BOOTCFG="/boot/config.txt"
 touch "\$BOOTCFG"
 if grep -q '^gpu_mem=' "\$BOOTCFG"; then
@@ -468,7 +496,6 @@ if [[ "$ENABLE_I2C" == "yes" ]]; then
   grep -q '^dtparam=i2c_arm=on' "\$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "\$BOOTCFG"
 fi
 
-# Enable bootloader if requested (package installed earlier)
 if [[ "$BOOTLOADER_INSTALL" == "yes" ]]; then
   true
 fi
@@ -487,7 +514,7 @@ finish() { sync; umount -R "$SDMOUNT" || true; dialog --msgbox "Installation com
 show_logo
 sleep 5
 clear
-ensureensure_prereqs
+ensure_prereqs
 select_drive
 select_fs
 select_kernel
