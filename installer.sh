@@ -545,7 +545,11 @@ EOF
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
-finish() { sync; umount -R "$SDMOUNT" || true; dialog --msgbox "Installation complete." "$HEIGHT" "$WIDTH"; }
+finish() {
+  sync
+  umount -R "$SDMOUNT" || true
+  dialog --msgbox "Installation complete." "$HEIGHT" "$WIDTH"
+}
 
 show_logo
 sleep 5
