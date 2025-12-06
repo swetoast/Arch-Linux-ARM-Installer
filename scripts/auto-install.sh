@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Minimal prerequisites that your installer expects (lean set)
+# Minimal prerequisites your installer expects
 pacman -Sy --noconfirm --needed \
   arch-install-scripts dialog bsdtar curl gpg md5sum util-linux \
   e2fsprogs btrfs-progs xfsprogs iwd networkmanager openssh avahi nss-mdns
 
-# Pick one network stack (your installer lets you choose later anyway)
+# Bring up networking (lean default)
 systemctl enable systemd-networkd systemd-resolved || true
-# Or choose NetworkManager:
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf || true
+# Or choose NetworkManager (uncomment next line if preferred)
 # systemctl enable NetworkManager || true
 
-ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf || true
-
-# Run your interactive# Run your interactive installer
+# Run your interactive installer (placed by build-image.sh)
 bash /root/installer.sh
+
+# Prevent re-run on next boot
+touch
