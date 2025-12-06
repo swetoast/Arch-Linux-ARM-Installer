@@ -113,6 +113,30 @@ compute_fs_flags_for_target() {
   export XFS_MOUNT_OPTS="$xfs_opts"
 }
 
+verify_target_safe() {
+  local root_src root_parent target_parent mounted=false
+  root_src="$(findmnt -no SOURCE /)"
+  root_parent=$(lsblk -no PKNAME "$root_src" 2>/dev/null || true)
+  target_parent=$(lsblk -no PKNAME "$SDDEV" 2>/dev/null || basename "$(readlink -f "$SDDEV")")
+
+  if [[ -n "$root_parent" && "$target_parent" == "$root_parent" ]]; then
+    echo "Refusing to operate on the system disk ($SDDEV)." >&2
+    exit 1
+  fi
+
+  while read -r child; do
+    if findmnt -rn -S "/dev/$child" >/dev/null 2>&1; then
+      mounted=true
+      break
+    fi
+  done < <(lsblk -nr "$SDDEV" | awk '{print $1}')
+
+  if [[ "$mounted" == "true" ]]; then
+    echo "Target device ($SDDEV) has mounted partitions. Unmount first." >&2
+    exit 1
+  fi
+}
+
 assert_cross_arch_chroot() {
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
   if ! arch-chroot "$SDMOUNT" /usr/bin/true 2>/dev/null; then
@@ -132,7 +156,7 @@ select_drive() {
   )
   ((${#DEVICES[@]})) || { echo "No suitable block devices found."; exit 1; }
   MENU_ITEMS=(); for i in "${!DEVICES[@]}"; do MENU_ITEMS+=("$i" "${DEVICES[$i]}"); done
-  CHOICE=$(dialog --clear --stdout --menu "Select target drive" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" "${MENU_ITEMS[@]}") || exit 1
+  CHOICE=$(dialog --clear --stdout --menu "Select target drive (NAME SIZE MODEL)" "$HEIGHT" "$WIDTH" "$MENU_HEIGHT" "${MENU_ITEMS[@]}") || exit 1
   SDDEV="/dev/$(echo "${DEVICES[$CHOICE]}" | awk '{print $1}')"
   if [[ "$SDDEV" =~ (mmcblk|nvme) ]]; then SDPARTBOOT="${SDDEV}p1"; SDPARTROOT="${SDDEV}p2"; else SDPARTBOOT="${SDDEV}1"; SDPARTROOT="${SDDEV}2"; fi
 }
@@ -503,7 +527,7 @@ else
 fi
 if [[ "$ENABLE_SPI" == "yes" ]]; then
   grep -q '^dtparam=spi=on' "$BOOTCFG" || echo "dtparam=spi=on" >> "$BOOTCFG"
-fi
+}
 if [[ "$ENABLE_I2C" == "yes" ]]; then
   grep -q '^dtparam=i2c_arm=on' "$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "$BOOTCFG"
 fi
@@ -518,7 +542,7 @@ EOF
   arch-chroot "$SDMOUNT" /tmp/setup-system.sh
   rm -f "$SDMOUNT/tmp/setup-system.sh"
 
-  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
+  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys  umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
 finish() { sync; umount -R "$SDMOUNT" || true; dialog --msgbox "Installation complete." "$HEIGHT" "$WIDTH"; }
@@ -531,6 +555,7 @@ select_drive
 select_fs
 select_kernel
 collect_system_info
+verify_target_safe
 partition_format
 install_rootfs
 configure_fstab
