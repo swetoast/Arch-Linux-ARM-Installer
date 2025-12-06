@@ -24,7 +24,6 @@ jobs:
             gnupg libarchive-tools xz-utils \
             dosfstools e2fsprogs btrfs-progs xfsprogs \
             util-linux rsync curl
-          # ensure loop module is present
           sudo modprobe loop || true
 
       - name: Make scripts executable
@@ -44,7 +43,7 @@ jobs:
           ./scripts/build-image.sh
 
       - name: Upload artifact
-        uses:        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: rpi-live-archarm
           path: artifacts/*.img.xz
