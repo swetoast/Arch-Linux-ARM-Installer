@@ -1,4 +1,4 @@
-name: Build Raspberry Pi live image
+name: Build Raspberry Pi live image (AArch64)
 
 on:
   push:
@@ -12,18 +12,19 @@ jobs:
   build-image:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write   # needed for the release step on tag
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build deps
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libarchive-tools xz-utils \
             dosfstools e2fsprogs btrfs-progs xfsprogs \
             util-linux rsync curl
+          # Ensure loop module is present (required for losetup --partscan)
           sudo modprobe loop || true
 
       - name: Make scripts executable
@@ -36,11 +37,10 @@ jobs:
         env:
           IMAGE_NAME: rpi-live-archarm-${{ github.run_number }}
           IMAGE_SIZE_GB: '4'
-          BOOT_MB: '256'
+          BOOT_MB: '512'   # you can set '256'; selective copy in build-image.sh prevents /boot overflow
           ROOTFS: 'ext4'
           DISTURL: 'http://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz'
-        run: |
-          ./scripts/build-image.sh
+        run: ./scripts/build-image.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
