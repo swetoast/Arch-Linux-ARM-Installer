@@ -66,7 +66,7 @@ show_logo() {
  ▟▛▀                               ▀▜▙
 \033[0m"
   echo
-  echo "Arch Linux ARM Installer"
+  echo "      Arch Linux ARM Installer"
 }
 
 cleanup_mounts() { umount -R "$SDMOUNT" 2>/dev/null || true; }
