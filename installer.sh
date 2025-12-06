@@ -43,7 +43,8 @@ ENABLE_I2C="no"
 # Logo function
 # Thanks to https://gist.github.com/LnLcFlx/18eb10bc74ed9e497d0fedc69468f933
 show_logo() {
-cat <<'EOF'
+  clear
+  echo -e "\033[38;2;23;147;209m
                    ▄
                   ▟█▙
                  ▟███▙
@@ -63,9 +64,9 @@ cat <<'EOF'
    ▟██████▀▀▀              ▀▀██████▙
   ▟███▀▘                       ▝▀███▙
  ▟▛▀                               ▀▜▙
-
-Arch Linux ARM Installer
-EOF
+\033[0m"
+  echo
+  echo "Arch Linux ARM Installer"
 }
 
 cleanup_mounts() { umount -R "$SDMOUNT" 2>/dev/null || true; }
