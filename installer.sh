@@ -1,3 +1,4 @@
+
 #!/bin/bash
 set -euo pipefail
 
@@ -9,6 +10,7 @@ MENU_HEIGHT=10
 
 SDMOUNT=/mnt/target
 DOWNLOADDIR=/tmp/archarm
+# NOTE: Point 1 skipped intentionally; keep HTTP (no HTTPS/signature changes)
 DISTURL="http://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz"
 
 SDDEV=""
@@ -163,6 +165,7 @@ EOF
 
 install_rootfs() {
   cd "$DOWNLOADDIR"
+  # NOTE: Point 1 skipped; keep simple download (no --fail/--retry/verification)
   [[ -f "$(basename "$DISTURL")" ]] || curl -JLO "$DISTURL"
   mount "$SDPARTROOT" "$SDMOUNT"; mkdir -p "$SDMOUNT/boot"; mount "$SDPARTBOOT" "$SDMOUNT/boot"
   bsdtar -xpf "$DOWNLOADDIR/$(basename "$DISTURL")" -C "$SDMOUNT"
@@ -183,6 +186,7 @@ EOT
 
 configure_cmdline() {
   root_partuuid=$(blkid -s PARTUUID -o value "$SDPARTROOT")
+  # NOTE: Point 6 skipped; keep 'splash' in cmdline.txt
   cat > "$SDMOUNT/boot/cmdline.txt" <<EOT
 console=serial0,115200 console=tty1 root=PARTUUID=$root_partuuid rw rootwait fsck.repair=yes quiet splash systemd.unified_cgroup_hierarchy=1
 EOT
@@ -316,11 +320,13 @@ NET
 EnableNetworkConfiguration=true
 RegulatoryDomain=$WIFI_COUNTRY
 CONF
-    cat > /etc/iwd/$sanitized_ssid.psk <<WIFI
+    # Point 3: store PSK under /var/lib/iwd
+    mkdir -p /var/lib/iwd
+    cat > /var/lib/iwd/$sanitized_ssid.psk <<WIFI
 [Security]
 PreSharedKey=$WIFI_PASS
 WIFI
-    chmod 600 /etc/iwd/$sanitized_ssid.psk || true
+    chmod 600 /var/lib/iwd/$sanitized_ssid.psk || true
   fi
 
 else
@@ -339,7 +345,30 @@ ExecStart=/usr/bin/iw reg set $WIFI_COUNTRY
 WantedBy=multi-user.target
 SRV
     systemctl enable regdomain.service || true
-    nmcli dev wifi connect "$WIFI_SSID" password "$WIFI_PASS" || true
+    # Point 2: pre-provision NM profile instead of nmcli connect in chroot
+    mkdir -p /etc/NetworkManager/system-connections
+    cat > "/etc/NetworkManager/system-connections/${sanitized_ssid}.nmconnection" <<NM
+[connection]
+id=${WIFI_SSID}
+type=wifi
+autoconnect=true
+interface-name=wlan0
+
+[wifi]
+ssid=${WIFI_SSID}
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=${WIFI_PASS}
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+NM
+    chmod 600 "/etc/NetworkManager/system-connections/${sanitized_ssid}.nmconnection"
   fi
 fi
 
@@ -348,6 +377,16 @@ if [[ "$SSH_ENABLE" == "yes" ]]; then
   systemctl enable sshd
   if [[ "$SSH_KEYONLY" == "yes" ]]; then
     sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config || true
+    # Point 7: seed authorized_keys from /root/seed_authorized_key.pub if present
+    mkdir -p "/home/$USERNAME/.ssh"
+    chmod 700 "/home/$USERNAME/.ssh"
+    if [[ -f /root/seed_authorized_key.pub ]]; then
+      cat /root/seed_authorized_key.pub >> "/home/$USERNAME/.ssh/authorized_keys"
+      chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
+      chown -R "$USERNAME:wheel" "/home/$USERNAME/.ssh"
+    else
+      echo "WARNING: SSH key-only selected but no /root/seed_authorized_key.pub found." >&2
+    fi
   fi
   if [[ "$SSH_DISABLE_ROOT" == "yes" ]]; then
     sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config || true
@@ -357,9 +396,9 @@ fi
 # Avahi/mDNS
 if [[ "$AVAHI_ENABLE" == "yes" ]]; then
   systemctl enable avahi-daemon
-  # ensure nss-mdns is configured
+  # Point 4: robust nsswitch.conf update
   if ! grep -q 'mdns4_minimal' /etc/nsswitch.conf 2>/dev/null; then
-    sed -i 's/hosts:      files dns/hosts:      files mdns4_minimal [NOTFOUND=return] dns/' /etc/nsswitch.conf || true
+    sed -ri 's/^(hosts:\s+files)(.*dns.*)$/\1 mdns4_minimal [NOTFOUND=return]\2/' /etc/nsswitch.conf || true
   fi
 fi
 
@@ -386,22 +425,21 @@ fi
 
 # Boot config tweaks
 BOOTCFG="/boot/config.txt"
-touch "\$BOOTCFG"
-if grep -q '^gpu_mem=' "\$BOOTCFG"; then
-  sed -i "s/^gpu_mem=.*/gpu_mem=$GPU_MEM/" "\$BOOTCFG"
+touch "$BOOTCFG"
+if grep -q '^gpu_mem=' "$BOOTCFG"; then
+  sed -i "s/^gpu_mem=.*/gpu_mem=$GPU_MEM/" "$BOOTCFG"
 else
-  echo "gpu_mem=$GPU_MEM" >> "\$BOOTCFG"
+  echo "gpu_mem=$GPU_MEM" >> "$BOOTCFG"
 fi
 if [[ "$ENABLE_SPI" == "yes" ]]; then
-  grep -q '^dtparam=spi=on' "\$BOOTCFG" || echo "dtparam=spi=on" >> "\$BOOTCFG"
+  grep -q '^dtparam=spi=on' "$BOOTCFG" || echo "dtparam=spi=on" >> "$BOOTCFG"
 fi
 if [[ "$ENABLE_I2C" == "yes" ]]; then
-  grep -q '^dtparam=i2c_arm=on' "\$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "\$BOOTCFG"
+  grep -q '^dtparam=i2c_arm=on' "$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "$BOOTCFG"
 fi
 
 # Enable bootloader if requested (package installed earlier)
 if [[ "$BOOTLOADER_INSTALL" == "yes" ]]; then
-  # no-op here; package install handled in install-tools
   true
 fi
 
