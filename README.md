@@ -27,6 +27,9 @@ Source: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
 16. If Wi‑Fi was configured, installs `iwd` (for systemd‑networkd) or `NetworkManager` + `iw`, sets the regulatory domain, and writes the Wi‑Fi configuration.  
 17. Cleans up and unmounts the drive.
 
+## Flowchart
+<img width="587" height="2268" alt="image" src="https://github.com/user-attachments/assets/101d9a74-b3ef-4519-b52f-da9e44688c91" />
+
 ## Requirements
 
 - Run the script as root.  
