@@ -571,7 +571,7 @@ ensure_prereqs
 select_drive
 select_fs
 select_kernel
-collectcollect_system_info
+collect_system_info
 verify_target_safe
 partition_format
 install_rootfs
