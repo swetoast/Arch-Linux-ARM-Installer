@@ -51,4 +51,4 @@ Source: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
 
 - The chosen drive will be completely wiped. Make sure you select the correct one.  
 - The script uses a text interface with uniform windows for a consistent experience.  
-- At the end, you will have a bootable Arch Linux ARM system prepared on your chosen drive, configured for Raspberry Pi 4/5 with your chosen kernel, user account, networking setup, and optional Wi‑Fi.  
+- By the end, you’ll have a bootable Arch Linux ARM drive for Raspberry Pi 4/5 set up with your chosen kernel, user, network, and optional Wi‑Fi. The install works safely on the target drive, and you can turn on extras like remote access (SSH), easy name‑based access on your network (Avahi), a swap file, automatic storage upkeep, and simple boot settings like GPU memory and SPI/I²C.
