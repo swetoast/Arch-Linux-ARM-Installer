@@ -25,13 +25,14 @@ Source: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
 14. Installs `sudo` and configures the wheel group in `/etc/sudoers`.  
 15. Creates the user account, sets passwords, and enables systemd services for networking and time sync.  
 16. If Wi‑Fi was configured, installs `iwd` (for systemd‑networkd) or `NetworkManager` + `iw`, sets the regulatory domain, and writes the Wi‑Fi configuration.  
-17. Cleans up and unmounts the drive.  
+17. Cleans up and unmounts the drive.
 
 ## Requirements
 
 - Run the script as root.  
 - Arch Linux system with `dialog`, `lsblk`, `sfdisk`, `mkfs.vfat`, `bsdtar`, `curl`, `arch-chroot`, `blkid`, `partprobe`, and `udevadm` installed.  
 - For Wi‑Fi setup: `iwd` or `NetworkManager` + `iw` will be installed automatically if you choose Wi‑Fi.  
+
 
 ## How to use
 
