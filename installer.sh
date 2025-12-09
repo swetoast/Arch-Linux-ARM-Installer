@@ -71,10 +71,166 @@ cleanup_mounts() { umount -R "$SDMOUNT" 2>/dev/null || true; }
 trap cleanup_mounts EXIT
 
 ensure_prereqs() {
-  for cmd in dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm sed awk grep gpg md5sum; do
-    command -v "$cmd" >/dev/null || { echo "Missing $cmd"; exit 1; }
+  local cmds=(dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm sed awk grep gpg md5sum)
+
+  local distro=""
+  if command -v pacman >/dev/null 2>&1; then
+    distro="arch"
+  elif command -v apt-get >/dev/null 2>&1; then
+    distro="debian"
+  elif command -v dnf >/dev/null 2>&1; then
+    distro="fedora"
+  else
+    distro="unknown"
+  fi
+
+  declare -A pkg_arch=(
+    [dialog]=dialog
+    [lsblk]=util-linux
+    [sfdisk]=util-linux
+    [mkfs.vfat]=dosfstools
+    [bsdtar]=libarchive
+    [curl]=curl
+    [arch-chroot]=arch-install-scripts
+    [blkid]=util-linux
+    [partprobe]=parted
+    [udevadm]=systemd
+    [sed]=sed
+    [awk]=gawk
+    [grep]=grep
+    [gpg]=gnupg
+    [md5sum]=coreutils
+  )
+
+  declare -A pkg_debian=(
+    [dialog]=dialog
+    [lsblk]=util-linux
+    [sfdisk]=util-linux
+    [mkfs.vfat]=dosfstools
+    [bsdtar]=libarchive-tools
+    [curl]=curl
+    [arch-chroot]=arch-install-scripts  # not available on Debian; kept for clarity
+    [blkid]=util-linux
+    [partprobe]=parted
+    [udevadm]=systemd
+    [sed]=sed
+    [awk]=gawk
+    [grep]=grep
+    [gpg]=gnupg
+    [md5sum]=coreutils
+  )
+
+  declare -A pkg_fedora=(
+    [dialog]=dialog
+    [lsblk]=util-linux
+    [sfdisk]=util-linux
+    [mkfs.vfat]=dosfstools
+    [bsdtar]=libarchive
+    [curl]=curl
+    [arch-chroot]=arch-install-scripts  # not native to Fedora
+    [blkid]=util-linux
+    [partprobe]=parted
+    [udevadm]=systemd
+    [sed]=sed
+    [awk]=gawk
+    [grep]=grep
+    [gpg]=gnupg2
+    [md5sum]=coreutils
+  )
+
+  local -n pkgmap
+  case "$distro" in
+    arch) pkgmap=pkg_arch ;;
+    debian) pkgmap=pkg_debian ;;
+    fedora) pkgmap=pkg_fedora ;;
+    *) 
+      pkgmap=pkg_debian
+      ;;
+  esac
+
+  local missing_cmds=()
+  local -a missing_pkgs=()
+  for cmd in "${cmds[@]}"; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing_cmds+=("$cmd")
+      local pkg="${pkgmap[$cmd]:-$cmd}"
+      missing_pkgs+=("$pkg")
+    fi
   done
-  mkdir -p "$SDMOUNT" "$DOWNLOADDIR"
+
+  if [ "${#missing_cmds[@]}" -eq 0 ]; then
+    echo "All prerequisites present."
+  else
+    echo "The following commands are missing:"
+    for c in "${missing_cmds[@]}"; do
+      echo "  - $c"
+    done
+
+    local uniq_pkgs=()
+    local seen
+    for p in "${missing_pkgs[@]}"; do
+      if [ -z "${seen[$p]:-}" ]; then
+        uniq_pkgs+=("$p")
+        seen[$p]=1
+      fi
+    done
+
+    case "$distro" in
+      arch)
+        echo
+        echo "Install with: sudo pacman -Sy --needed ${uniq_pkgs[*]}"
+        ;;
+      debian)
+        echo
+        echo "Install with: sudo apt-get update && sudo apt-get install -y ${uniq_pkgs[*]}"
+        ;;
+      fedora)
+        echo
+        echo "Install with: sudo dnf install -y ${uniq_pkgs[*]}"
+        ;;
+      *)
+        echo
+        echo "Unknown distro. Please install the following packages manually: ${uniq_pkgs[*]}"
+        ;;
+    esac
+
+    read -r -p "Install missing packages now? [y/N] " ans
+    case "$ans" in
+      [Yy]* )
+        if [ "$distro" = "arch" ]; then
+          if command -v sudo >/dev/null 2>&1; then
+            sudo pacman -Sy --needed "${uniq_pkgs[@]}"
+          else
+            pacman -Sy --needed "${uniq_pkgs[@]}"
+          fi
+        elif [ "$distro" = "debian" ]; then
+          if command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y "${uniq_pkgs[@]}"
+          else
+            apt-get update
+            apt-get install -y "${uniq_pkgs[@]}"
+          fi
+        elif [ "$distro" = "fedora" ]; then
+          if command -v sudo >/dev/null 2>&1; then
+            sudo dnf install -y "${uniq_pkgs[@]}"
+          else
+            dnf install -y "${uniq_pkgs[@]}"
+          fi
+        else
+          echo "Automatic install not supported for this distro. Please run the suggested command manually."
+          return 1
+        fi
+        ;;
+      *)
+        echo "Skipping installation. Please install the missing packages before continuing."
+        return 1
+        ;;
+    esac
+  fi
+
+  # Ensure directories exist (no-op if variables empty)
+  mkdir -p "${SDMOUNT:-/mnt}" "${DOWNLOADDIR:-/tmp/downloads}"
 }
 
 compute_fs_flags_for_target() {
