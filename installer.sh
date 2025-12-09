@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
+# Must run as root
 if [[ $EUID -ne 0 ]]; then echo "Run as root."; exit 1; fi
 
 HEIGHT=20
@@ -71,7 +72,10 @@ cleanup_mounts() { umount -R "$SDMOUNT" 2>/dev/null || true; }
 trap cleanup_mounts EXIT
 
 ensure_prereqs() {
-  local cmds=(dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm sed awk grep gpg md5sum)
+  local cmds=(
+    dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm sed awk grep gpg md5sum
+    wipefs findmnt tune2fs mkfs.ext4 mkfs.btrfs mkfs.xfs
+  )
 
   local distro=""
   if command -v pacman >/dev/null 2>&1; then
@@ -100,6 +104,13 @@ ensure_prereqs() {
     [grep]=grep
     [gpg]=gnupg
     [md5sum]=coreutils
+    [wipefs]=util-linux
+    [findmnt]=util-linux
+    [tune2fs]=e2fsprogs
+    [mkfs.ext4]=e2fsprogs
+    [mkfs.btrfs]=btrfs-progs
+    [mkfs.xfs]=xfsprogs
+    [dirmngr]=dirmngr
   )
 
   declare -A pkg_debian=(
@@ -109,7 +120,7 @@ ensure_prereqs() {
     [mkfs.vfat]=dosfstools
     [bsdtar]=libarchive-tools
     [curl]=curl
-    [arch-chroot]=arch-install-scripts  # not available on Debian; kept for clarity
+    [arch-chroot]=arch-install-scripts
     [blkid]=util-linux
     [partprobe]=parted
     [udevadm]=systemd
@@ -118,6 +129,13 @@ ensure_prereqs() {
     [grep]=grep
     [gpg]=gnupg
     [md5sum]=coreutils
+    [wipefs]=util-linux
+    [findmnt]=util-linux
+    [tune2fs]=e2fsprogs
+    [mkfs.ext4]=e2fsprogs
+    [mkfs.btrfs]=btrfs-progs
+    [mkfs.xfs]=xfsprogs
+    [dirmngr]=dirmngr
   )
 
   declare -A pkg_fedora=(
@@ -127,7 +145,7 @@ ensure_prereqs() {
     [mkfs.vfat]=dosfstools
     [bsdtar]=libarchive
     [curl]=curl
-    [arch-chroot]=arch-install-scripts  # not native to Fedora
+    [arch-chroot]=arch-install-scripts
     [blkid]=util-linux
     [partprobe]=parted
     [udevadm]=systemd
@@ -136,16 +154,20 @@ ensure_prereqs() {
     [grep]=grep
     [gpg]=gnupg2
     [md5sum]=coreutils
+    [wipefs]=util-linux
+    [findmnt]=util-linux
+    [tune2fs]=e2fsprogs
+    [mkfs.ext4]=e2fsprogs
+    [mkfs.btrfs]=btrfs-progs
+    [mkfs.xfs]=xfsprogs
+    [dirmngr]=dirmngr
   )
 
-  local -n pkgmap
+  declare -n pkgmap=pkg_debian
   case "$distro" in
-    arch) pkgmap=pkg_arch ;;
-    debian) pkgmap=pkg_debian ;;
-    fedora) pkgmap=pkg_fedora ;;
-    *) 
-      pkgmap=pkg_debian
-      ;;
+    arch)   declare -n pkgmap=pkg_arch ;;
+    debian) declare -n pkgmap=pkg_debian ;;
+    fedora) declare -n pkgmap=pkg_fedora ;;
   esac
 
   local missing_cmds=()
@@ -158,79 +180,67 @@ ensure_prereqs() {
     fi
   done
 
+  local -a uniq_pkgs=()
+  declare -A seen=()
+  for p in "${missing_pkgs[@]}"; do
+    if [[ -z "${seen[$p]+x}" ]]; then
+      uniq_pkgs+=("$p")
+      seen[$p]=1
+    fi
+  done
+
   if [ "${#missing_cmds[@]}" -eq 0 ]; then
     echo "All prerequisites present."
   else
     echo "The following commands are missing:"
-    for c in "${missing_cmds[@]}"; do
-      echo "  - $c"
-    done
-
-    local uniq_pkgs=()
-    local seen
-    for p in "${missing_pkgs[@]}"; do
-      if [ -z "${seen[$p]:-}" ]; then
-        uniq_pkgs+=("$p")
-        seen[$p]=1
-      fi
-    done
+    printf '  - %s\n' "${missing_cmds[@]}"
+    echo
 
     case "$distro" in
-      arch)
-        echo
-        echo "Install with: sudo pacman -Sy --needed ${uniq_pkgs[*]}"
-        ;;
-      debian)
-        echo
-        echo "Install with: sudo apt-get update && sudo apt-get install -y ${uniq_pkgs[*]}"
-        ;;
-      fedora)
-        echo
-        echo "Install with: sudo dnf install -y ${uniq_pkgs[*]}"
-        ;;
-      *)
-        echo
-        echo "Unknown distro. Please install the following packages manually: ${uniq_pkgs[*]}"
-        ;;
+      arch)   echo "Install with: pacman -Sy --needed ${uniq_pkgs[*]}" ;;
+      debian) echo "Install with: apt-get update && apt-get install -y ${uniq_pkgs[*]}" ;;
+      fedora) echo "Install with: dnf install -y ${uniq_pkgs[*]}" ;;
+      *)      echo "Unknown distro. Please install these packages manually: ${uniq_pkgs[*]}" ;;
     esac
 
-    read -r -p "Install missing packages now? [y/N] " ans
+    if [[ "${AUTO_INSTALL:-}" == "1" ]]; then
+      ans="y"
+    else
+      read -r -p "Install missing packages now? [y/N] " ans
+    fi
+
     case "$ans" in
       [Yy]* )
         if [ "$distro" = "arch" ]; then
-          if command -v sudo >/dev/null 2>&1; then
-            sudo pacman -Sy --needed "${uniq_pkgs[@]}"
-          else
-            pacman -Sy --needed "${uniq_pkgs[@]}"
-          fi
+          if command -v sudo >/dev/null 2>&1; then sudo pacman -Sy --needed "${uniq_pkgs[@]}"; else pacman -Sy --needed "${uniq_pkgs[@]}"; fi
         elif [ "$distro" = "debian" ]; then
-          if command -v sudo >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y "${uniq_pkgs[@]}"
-          else
-            apt-get update
-            apt-get install -y "${uniq_pkgs[@]}"
-          fi
+          if command -v sudo >/dev/null 2>&1; then sudo apt-get update; sudo apt-get install -y "${uniq_pkgs[@]}"; else apt-get update; apt-get install -y "${uniq_pkgs[@]}"; fi
         elif [ "$distro" = "fedora" ]; then
-          if command -v sudo >/dev/null 2>&1; then
-            sudo dnf install -y "${uniq_pkgs[@]}"
-          else
-            dnf install -y "${uniq_pkgs[@]}"
-          fi
+          if command -v sudo >/dev/null 2>&1; then sudo dnf install -y "${uniq_pkgs[@]}"; else dnf install -y "${uniq_pkgs[@]}"; fi
         else
           echo "Automatic install not supported for this distro. Please run the suggested command manually."
           return 1
         fi
         ;;
-      *)
-        echo "Skipping installation. Please install the missing packages before continuing."
-        return 1
-        ;;
+      *) echo "Skipping installation. Please install the missing packages before continuing."; return 1 ;;
     esac
   fi
 
-  # Ensure directories exist (no-op if variables empty)
+  if ! command -v arch-chroot >/dev/null 2>&1; then
+    echo "NOTE: 'arch-chroot' not found; will use plain 'chroot' where applicable."
+    echo "For cross-arch chroot on non-ARM hosts, ensure binfmt_misc and qemu-user-static are installed."
+  fi
+
   mkdir -p "${SDMOUNT:-/mnt}" "${DOWNLOADDIR:-/tmp/downloads}"
+}
+
+chroot_cmd() {  
+  local rootfs="$1"; shift
+  if command -v arch-chroot >/dev/null 2>&1; then
+    arch-chroot "$rootfs" "$@"
+  else
+    chroot "$rootfs" "$@"
+  fi
 }
 
 compute_fs_flags_for_target() {
@@ -251,12 +261,10 @@ compute_fs_flags_for_target() {
     export TARGET_DISCARD_SUPPORTED="yes"
   fi
 
-  # mkfs argument arrays (quote comma-containing values to satisfy SC2054)
   EXT4_MKFS_ARGS=( -F -O "metadata_csum,64bit" -E "lazy_itable_init=1,lazy_journal_init=1" )
   BTRFS_MKFS_ARGS=( -f )
   XFS_MKFS_ARGS=( -f -m "crc=1,reflink=1" -n ftype=1 )
 
-  # mount option strings
   local ext4_opts="defaults,noatime,lazytime,commit=120"
   if [[ "$TARGET_ROTATIONAL" == "0" && "$TARGET_DISCARD_SUPPORTED" == "yes" && "$TRIM_ENABLE" == "yes" ]]; then
     ext4_opts="${ext4_opts},discard"
@@ -302,10 +310,10 @@ verify_target_safe() {
 
 assert_cross_arch_chroot() {
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
-  if ! arch-chroot "$SDMOUNT" /usr/bin/true 2>/dev/null; then
+  if ! chroot_cmd "$SDMOUNT" /usr/bin/true 2>/dev/null; then
     umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
     dialog --msgbox "Foreign-arch chroot detected. Install qemu-user-static/binfmt or run this on an ARM host." "$HEIGHT" "$WIDTH"
-    echo "ERROR: arch-chroot into ARM rootfs requires binfmt_misc + qemu-aarch64-static, or an ARM host."
+    echo "ERROR: chroot into ARM rootfs requires binfmt_misc + qemu-aarch64-static, or an ARM host."
     exit 1
   fi
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
@@ -411,9 +419,11 @@ install_rootfs() {
   curl -f -O "$md5url" || curl -f -O "$(dirname "$DISTURL")/${base}.md5"
   curl -f -O "$sigurl" || curl -f -O "$(dirname "$DISTURL")/${base}.sig"
   md5sum -c "${base}.md5"
+
   gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys 68B3537F39A313B3E574D06777193F152BDBE6A6 \
     || { curl -fsSL https://raw.githubusercontent.com/archlinuxarm/archlinuxarm-keyring/master/archlinuxarm.gpg -o archlinuxarm.gpg && gpg --import archlinuxarm.gpg; }
   gpg --verify "${base}.sig" "$base"
+
   mount "$SDPARTROOT" "$SDMOUNT"; mkdir -p "$SDMOUNT/boot"; mount "$SDPARTBOOT" "$SDMOUNT/boot"
   bsdtar -xpf "$DOWNLOADDIR/$base" -C "$SDMOUNT"
 }
@@ -447,7 +457,7 @@ EOT
 replace_kernel() {
   assert_cross_arch_chroot
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
-  arch-chroot "$SDMOUNT" /bin/bash -c "set -euo pipefail; pacman-key --init || true; pacman-key --populate archlinuxarm || true; pacman -Sy --noconfirm ${KERNEL_FLAVOR} ${KERNEL_FLAVOR}-headers linux-firmware"
+  chroot_cmd "$SDMOUNT" /bin/bash -c "set -euo pipefail; pacman-key --init || true; pacman-key --populate archlinuxarm || true; pacman -Sy --noconfirm ${KERNEL_FLAVOR} ${KERNEL_FLAVOR}-headers linux-firmware"
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
@@ -519,7 +529,7 @@ EOF
   fi
 
   chmod +x "$SDMOUNT/tmp/install-tools.sh"
-  arch-chroot "$SDMOUNT" /tmp/install-tools.sh
+  chroot_cmd "$SDMOUNT" /tmp/install-tools.sh
   rm -f "$SDMOUNT/tmp/install-tools.sh"
 
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
@@ -528,8 +538,7 @@ EOF
 configure_system_chroot() {
   assert_cross_arch_chroot
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
-
-  # Use parameter expansion to sanitize SSID (fix SC2001)
+  
   sanitized_ssid=${WIFI_SSID//[^A-Za-z0-9._-]/_}
   WIFI_COUNTRY_UPPER=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
 
@@ -537,23 +546,27 @@ configure_system_chroot() {
 #!/bin/bash
 set -euo pipefail
 
-sed -i '/^$LOCALE/d' /etc/locale.gen || true
+# Locale & console
+sed -i '/^${LOCALE//\//\\/}/d' /etc/locale.gen || true
 echo "$LOCALE UTF-8" >> /etc/locale.gen
 locale-gen
 echo "LANG=$LOCALE" > /etc/locale.conf
 echo "KEYMAP=$KEYMAP" > /etc/vconsole.conf
 
+# Time
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
 systemctl enable systemd-timesyncd
 
+# Hostname
 echo "$HOSTNAME" > /etc/hostname
 
+# User provisioning
 if ! id "$USERNAME" >/dev/null 2>&1; then useradd -m -G wheel -s /bin/bash "$USERNAME"; fi
 echo "$USERNAME:$USERPASS" | chpasswd
 echo "root:$ROOTPASS" | chpasswd
 
-# delete 'alarm' only if a proper admin user exists and is in wheel, and chosen username isn't 'alarm'
+# Remove 'alarm' if admin user exists and is in wheel and username != 'alarm'
 if [[ "$USERNAME" != "alarm" ]]; then
   if id "$USERNAME" >/dev/null 2>&1 && id -nG "$USERNAME" | tr ' ' '\n' | grep -qx wheel; then
     if id alarm >/dev/null 2>&1; then userdel -r alarm || true; fi
@@ -562,6 +575,7 @@ if [[ "$USERNAME" != "alarm" ]]; then
   fi
 fi
 
+# Networking
 if [[ "$NETWORKING" == "systemd-networkd" ]]; then
   systemctl enable systemd-networkd systemd-resolved
   mkdir -p /etc/systemd/network
@@ -575,8 +589,7 @@ NET
 
   if [[ -n "$WIFI_SSID" ]]; then
     systemctl enable iwd
-    mkdir -p /var/lib/iwd
-    mkdir -p /etc/iwd
+    mkdir -p /var/lib/iwd /etc/iwd
     cat > /etc/iwd/main.conf <<CONF
 [General]
 EnableNetworkConfiguration=true
@@ -629,6 +642,7 @@ NM
   fi
 fi
 
+# SSH
 if [[ "$SSH_ENABLE" == "yes" ]]; then
   systemctl enable sshd
   if [[ "$SSH_KEYONLY" == "yes" ]]; then
@@ -648,6 +662,7 @@ if [[ "$SSH_ENABLE" == "yes" ]]; then
   fi
 fi
 
+# Avahi/mDNS
 if [[ "$AVAHI_ENABLE" == "yes" ]]; then
   systemctl enable avahi-daemon
   if ! grep -q 'mdns4_minimal' /etc/nsswitch.conf 2>/dev/null; then
@@ -655,12 +670,13 @@ if [[ "$AVAHI_ENABLE" == "yes" ]]; then
   fi
 fi
 
+# Chrony vs timesyncd
 if [[ "$CHRONY_ENABLE" == "yes" ]]; then
   systemctl disable systemd-timesyncd || true
   systemctl enable chrony
 fi
 
-# Create swap file only when requested (non-zero), including on btrfs
+# Swapfile creation (supports btrfs special handling)
 if [[ "$SWAP_SIZE_GB" != "0" && "$SWAP_SIZE_GB" != "" ]]; then
   if [[ "$(findmnt -no FSTYPE / || echo "")" == "btrfs" ]]; then
     if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
@@ -683,10 +699,12 @@ if [[ "$SWAP_SIZE_GB" != "0" && "$SWAP_SIZE_GB" != "" ]]; then
   fi
 fi
 
+# Weekly fstrim
 if [[ "$TRIM_ENABLE" == "yes" ]]; then
   systemctl enable fstrim.timer || true
-fi
+fifi
 
+# /boot/config.txt tweaks
 BOOTCFG="/boot/config.txt"
 touch "$BOOTCFG"
 if grep -q '^gpu_mem=' "$BOOTCFG"; then
@@ -701,6 +719,7 @@ if [[ "$ENABLE_I2C" == "yes" ]]; then
   grep -q '^dtparam=i2c_arm=on' "$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "$BOOTCFG"
 fi
 
+# Bootloader optional step reserved for future use
 if [[ "$BOOTLOADER_INSTALL" == "yes" ]]; then
   true
 fi
@@ -708,7 +727,7 @@ fi
 EOF
 
   chmod +x "$SDMOUNT/tmp/setup-system.sh"
-  arch-chroot "$SDMOUNT" /tmp/setup-system.sh
+  chroot_cmd "$SDMOUNT" /tmp/setup-system.sh
   rm -f "$SDMOUNT/tmp/setup-system.sh"
 
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
@@ -721,7 +740,7 @@ finish() {
 }
 
 show_logo
-sleep 5
+sleep 2
 clear
 ensure_prereqs
 select_drive
@@ -736,4 +755,3 @@ configure_cmdline
 replace_kernel
 install_tools_chroot
 configure_system_chroot
-finish
