@@ -529,6 +529,7 @@ EOF
   umount "$SDMOUNT/dev" "$SDMOUNT/proc" "$SDMOUNT/sys" "$SDMOUNT/run" || true
 }
 
+
 configure_system_chroot() {
   assert_cross_arch_chroot
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
@@ -566,7 +567,7 @@ if [[ "$USERNAME" != "alarm" ]]; then
   if id "$USERNAME" >/dev/null 2>&1 && id -nG "$USERNAME" | tr ' ' '\\n' | grep -qx wheel; then
     if id alarm >/dev/null 2>&1; then userdel -r alarm || true; fi
   else
-    echo "WARNING: user '$USERNAME' not fully provisioned; retaining 'alarm' account." >&2
+    echo "WARNING: user '\$USERNAME' not fully provisioned; retaining 'alarm' account." >&2
   fi
 fi
 
@@ -587,7 +588,7 @@ NET
     mkdir -p /var/lib/iwd /etc/iwd
     cat > /etc/iwd/main.conf <<CONF
 [General]
-EnableNetworkConfiguration=true
+EnableNetworkConfiguration=false
 RegulatoryDomain=$WIFI_COUNTRY_UPPER
 CONF
     cat > "/var/lib/iwd/${WIFI_SSID}.psk" <<WIFI
@@ -595,6 +596,14 @@ CONF
 Passphrase=$WIFI_PASS
 WIFI
     chmod 600 "/var/lib/iwd/${WIFI_SSID}.psk" || true
+
+    # Let systemd-networkd handle DHCP on Wi-Fi:
+    cat > /etc/systemd/network/25-wireless-dhcp.network <<NET
+[Match]
+Name=wlan*
+[Network]
+DHCP=yes
+NET
   fi
 
 else
@@ -661,7 +670,7 @@ fi
 if [[ "$AVAHI_ENABLE" == "yes" ]]; then
   systemctl enable avahi-daemon
   if ! grep -q 'mdns4_minimal' /etc/nsswitch.conf 2>/dev/null; then
-    sed -ri 's/^(hosts:\s+files)(.*dns.*)$/\1 mdns4_minimal [NOTFOUND=return]\2/' /etc/nsswitch.conf || true
+    sed -ri 's/^(hosts:\s+files)(.*dns.*)$/\\1 mdns4_minimal [NOTFOUND=return]\\2/' /etc/nsswitch.conf || true
   fi
 fi
 
@@ -673,20 +682,20 @@ fi
 
 # Swapfile creation (supports btrfs special handling)
 if [[ "$SWAP_SIZE_GB" != "0" && "$SWAP_SIZE_GB" != "" ]]; then
-  if [[ "$(findmnt -no FSTYPE / || echo "")" == "btrfs" ]]; then
+  if [[ "\$(findmnt -no FSTYPE / || echo "")" == "btrfs" ]]; then
     if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
       rm -f /swapfile
       truncate -s 0 /swapfile
       chattr +C /swapfile || true
       btrfs property set /swapfile compression none || true
-      dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_SIZE_GB*1024)) status=progress
+      dd if=/dev/zero of=/swapfile bs=1M count=\$((SWAP_SIZE_GB*1024)) status=progress
       chmod 600 /swapfile
       mkswap /swapfile
       echo "/swapfile none swap defaults 0 0" >> /etc/fstab
     fi
   else
     if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
-      fallocate -l "${SWAP_SIZE_GB}G" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_SIZE_GB*1024)) status=progress
+      fallocate -l "\${SWAP_SIZE_GB}G" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=\$((SWAP_SIZE_GB*1024)) status=progress
       chmod 600 /swapfile
       mkswap /swapfile
       echo "/swapfile none swap defaults 0 0" >> /etc/fstab
