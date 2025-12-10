@@ -702,7 +702,7 @@ fi
 # Weekly fstrim
 if [[ "$TRIM_ENABLE" == "yes" ]]; then
   systemctl enable fstrim.timer || true
-fifi
+fi
 
 # /boot/config.txt tweaks
 BOOTCFG="/boot/config.txt"
