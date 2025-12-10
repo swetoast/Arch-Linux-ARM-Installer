@@ -10,7 +10,7 @@ MENU_HEIGHT=10
 
 SDMOUNT=/mnt/target
 DOWNLOADDIR=/tmp/archarm
-DISTURL="http://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz"
+DISTURL="https://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz"
 
 SDDEV=""
 SDPARTBOOT=""
@@ -74,7 +74,7 @@ trap cleanup_mounts EXIT
 ensure_prereqs() {
   local cmds=(
     dialog lsblk sfdisk mkfs.vfat bsdtar curl arch-chroot blkid partprobe udevadm sed awk grep gpg md5sum
-    wipefs findmnt tune2fs mkfs.ext4 mkfs.btrfs mkfs.xfs
+    wipefs findmnt tune2fs mkfs.ext4 mkfs.btrfs mkfs.xfs dirmngr
   )
 
   local distro=""
@@ -234,7 +234,7 @@ ensure_prereqs() {
   mkdir -p "${SDMOUNT:-/mnt}" "${DOWNLOADDIR:-/tmp/downloads}"
 }
 
-chroot_cmd() {  
+chroot_cmd() {
   local rootfs="$1"; shift
   if command -v arch-chroot >/dev/null 2>&1; then
     arch-chroot "$rootfs" "$@"
@@ -450,7 +450,7 @@ EOT
 configure_cmdline() {
   root_partuuid=$(blkid -s PARTUUID -o value "$SDPARTROOT")
   cat > "$SDMOUNT/boot/cmdline.txt" <<EOT
-console=serial0,115200 console=tty1 root=PARTUUID=$root_partuuid rw rootwait fsck.repair=yes quiet splash systemd.unified_cgroup_hierarchy=1
+console=serial0,115200 console=tty1 root=PARTUUID=$root_partuuid rw rootwait fsck.repair=yes quiet systemd.unified_cgroup_hierarchy=1
 EOT
 }
 
@@ -516,12 +516,6 @@ pacman -Sy --noconfirm chrony
 EOF
   fi
 
-  if [[ "$TRIM_ENABLE" == "yes" ]]; then
-    cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
-systemctl enable fstrim.timer
-EOF
-  fi
-
   if [[ "$BOOTLOADER_INSTALL" == "yes" ]]; then
     cat >> "$SDMOUNT/tmp/install-tools.sh" <<'EOF'
 pacman -Sy --noconfirm raspberrypi-bootloader
@@ -538,7 +532,8 @@ EOF
 configure_system_chroot() {
   assert_cross_arch_chroot
   mount --bind /dev "$SDMOUNT/dev"; mount --bind /proc "$SDMOUNT/proc"; mount --bind /sys "$SDMOUNT/sys"; mount --bind /run "$SDMOUNT/run"
-  
+
+  # For NetworkManager file naming only (iwd uses exact SSID)
   sanitized_ssid=${WIFI_SSID//[^A-Za-z0-9._-]/_}
   WIFI_COUNTRY_UPPER=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
 
@@ -568,7 +563,7 @@ echo "root:$ROOTPASS" | chpasswd
 
 # Remove 'alarm' if admin user exists and is in wheel and username != 'alarm'
 if [[ "$USERNAME" != "alarm" ]]; then
-  if id "$USERNAME" >/dev/null 2>&1 && id -nG "$USERNAME" | tr ' ' '\n' | grep -qx wheel; then
+  if id "$USERNAME" >/dev/null 2>&1 && id -nG "$USERNAME" | tr ' ' '\\n' | grep -qx wheel; then
     if id alarm >/dev/null 2>&1; then userdel -r alarm || true; fi
   else
     echo "WARNING: user '$USERNAME' not fully provisioned; retaining 'alarm' account." >&2
@@ -595,11 +590,11 @@ NET
 EnableNetworkConfiguration=true
 RegulatoryDomain=$WIFI_COUNTRY_UPPER
 CONF
-    cat > /var/lib/iwd/$sanitized_ssid.psk <<WIFI
+    cat > "/var/lib/iwd/${WIFI_SSID}.psk" <<WIFI
 [Security]
 Passphrase=$WIFI_PASS
 WIFI
-    chmod 600 /var/lib/iwd/$sanitized_ssid.psk || true
+    chmod 600 "/var/lib/iwd/${WIFI_SSID}.psk" || true
   fi
 
 else
@@ -706,17 +701,17 @@ fi
 
 # /boot/config.txt tweaks
 BOOTCFG="/boot/config.txt"
-touch "$BOOTCFG"
-if grep -q '^gpu_mem=' "$BOOTCFG"; then
-  sed -i "s/^gpu_mem=.*/gpu_mem=$GPU_MEM/" "$BOOTCFG"
+touch "\$BOOTCFG"
+if grep -q '^gpu_mem=' "\$BOOTCFG"; then
+  sed -i "s/^gpu_mem=.*/gpu_mem=$GPU_MEM/" "\$BOOTCFG"
 else
-  echo "gpu_mem=$GPU_MEM" >> "$BOOTCFG"
+  echo "gpu_mem=$GPU_MEM" >> "\$BOOTCFG"
 fi
 if [[ "$ENABLE_SPI" == "yes" ]]; then
-  grep -q '^dtparam=spi=on' "$BOOTCFG" || echo "dtparam=spi=on" >> "$BOOTCFG"
+  grep -q '^dtparam=spi=on' "\$BOOTCFG" || echo "dtparam=spi=on" >> "\$BOOTCFG"
 fi
 if [[ "$ENABLE_I2C" == "yes" ]]; then
-  grep -q '^dtparam=i2c_arm=on' "$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "$BOOTCFG"
+  grep -q '^dtparam=i2c_arm=on' "\$BOOTCFG" || echo "dtparam=i2c_arm=on" >> "\$BOOTCFG"
 fi
 
 # Bootloader optional step reserved for future use
@@ -755,3 +750,4 @@ configure_cmdline
 replace_kernel
 install_tools_chroot
 configure_system_chroot
+finish
