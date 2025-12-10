@@ -88,87 +88,92 @@ ensure_prereqs() {
     distro="unknown"
   fi
 
-  declare -A pkg_arch=(
-    [dialog]=dialog
-    [lsblk]=util-linux
-    [sfdisk]=util-linux
-    [mkfs.vfat]=dosfstools
-    [bsdtar]=libarchive
-    [curl]=curl
-    [arch-chroot]=arch-install-scripts
-    [blkid]=util-linux
-    [partprobe]=parted
-    [udevadm]=systemd
-    [sed]=sed
-    [awk]=gawk
-    [grep]=grep
-    [gpg]=gnupg
-    [md5sum]=coreutils
-    [wipefs]=util-linux
-    [findmnt]=util-linux
-    [tune2fs]=e2fsprogs
-    [mkfs.ext4]=e2fsprogs
-    [mkfs.btrfs]=btrfs-progs
-    [mkfs.xfs]=xfsprogs
-    [dirmngr]=dirmngr
-  )
 
-  declare -A pkg_debian=(
-    [dialog]=dialog
-    [lsblk]=util-linux
-    [sfdisk]=util-linux
-    [mkfs.vfat]=dosfstools
-    [bsdtar]=libarchive-tools
-    [curl]=curl
-    [arch-chroot]=arch-install-scripts
-    [blkid]=util-linux
-    [partprobe]=parted
-    [udevadm]=systemd
-    [sed]=sed
-    [awk]=gawk
-    [grep]=grep
-    [gpg]=gnupg
-    [md5sum]=coreutils
-    [wipefs]=util-linux
-    [findmnt]=util-linux
-    [tune2fs]=e2fsprogs
-    [mkfs.ext4]=e2fsprogs
-    [mkfs.btrfs]=btrfs-progs
-    [mkfs.xfs]=xfsprogs
-    [dirmngr]=dirmngr
-  )
-
-  declare -A pkg_fedora=(
-    [dialog]=dialog
-    [lsblk]=util-linux
-    [sfdisk]=util-linux
-    [mkfs.vfat]=dosfstools
-    [bsdtar]=libarchive
-    [curl]=curl
-    [arch-chroot]=arch-install-scripts
-    [blkid]=util-linux
-    [partprobe]=parted
-    [udevadm]=systemd
-    [sed]=sed
-    [awk]=gawk
-    [grep]=grep
-    [gpg]=gnupg2
-    [md5sum]=coreutils
-    [wipefs]=util-linux
-    [findmnt]=util-linux
-    [tune2fs]=e2fsprogs
-    [mkfs.ext4]=e2fsprogs
-    [mkfs.btrfs]=btrfs-progs
-    [mkfs.xfs]=xfsprogs
-    [dirmngr]=dirmngr
-  )
-
-  declare -n pkgmap=pkg_debian
-  case "$distro" in
-    arch)   declare -n pkgmap=pkg_arch ;;
-    debian) declare -n pkgmap=pkg_debian ;;
-    fedora) declare -n pkgmap=pkg_fedora ;;
-  esac
+# Create pkgmap based on detected distro — no nameref needed
+declare -A pkgmap
+case "$distro" in
+  arch)
+    pkgmap=(
+      [dialog]=dialog
+      [lsblk]=util-linux
+      [sfdisk]=util-linux
+      [mkfs.vfat]=dosfstools
+      [bsdtar]=libarchive
+      [curl]=curl
+      [arch-chroot]=arch-install-scripts
+      [blkid]=util-linux
+      [partprobe]=parted
+      [udevadm]=systemd
+      [sed]=sed
+      [awk]=gawk
+      [grep]=grep
+      [gpg]=gnupg
+      [md5sum]=coreutils
+      [wipefs]=util-linux
+      [findmnt]=util-linux
+      [tune2fs]=e2fsprogs
+      [mkfs.ext4]=e2fsprogs
+      [mkfs.btrfs]=btrfs-progs
+      [mkfs.xfs]=xfsprogs
+      [dirmngr]=dirmngr
+    )
+    ;;
+  debian)
+    pkgmap=(
+      [dialog]=dialog
+      [lsblk]=util-linux
+      [sfdisk]=util-linux
+      [mkfs.vfat]=dosfstools
+      [bsdtar]=libarchive-tools
+      [curl]=curl
+      [arch-chroot]=arch-install-scripts
+      [blkid]=util-linux
+      [partprobe]=parted
+      [udevadm]=systemd
+      [sed]=sed
+      [awk]=gawk
+      [grep]=grep
+      [gpg]=gnupg
+      [md5sum]=coreutils
+      [wipefs]=util-linux
+      [findmnt]=util-linux
+      [tune2fs]=e2fsprogs
+      [mkfs.ext4]=e2fsprogs
+      [mkfs.btrfs]=btrfs-progs
+      [mkfs.xfs]=xfsprogs
+      [dirmngr]=dirmngr
+    )
+    ;;
+  fedora)
+    pkgmap=(
+      [dialog]=dialog
+      [lsblk]=util-linux
+      [sfdisk]=util-linux
+      [mkfs.vfat]=dosfstools
+      [bsdtar]=libarchive
+      [curl]=curl
+      [arch-chroot]=arch-install-scripts
+      [blkid]=util-linux
+      [partprobe]=parted
+      [udevadm]=systemd
+      [sed]=sed
+      [awk]=gawk
+      [grep]=grep
+      [gpg]=gnupg2
+      [md5sum]=coreutils
+      [wipefs]=util-linux
+      [findmnt]=util-linux
+      [tune2fs]=e2fsprogs
+      [mkfs.ext4]=e2fsprogs
+      [mkfs.btrfs]=btrfs-progs
+      [mkfs.xfs]=xfsprogs
+      [dirmngr]=dirmngr
+    )
+    ;;
+  *)
+    echo "Unknown distro. Package mapping unavailable."; return 1
+    ;;
+esac
 
   local missing_cmds=()
   local -a missing_pkgs=()
